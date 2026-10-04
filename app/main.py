@@ -51,7 +51,7 @@ app = FastAPI(
 # (see Settings._validate_environment_guards); in development/testing an
 # empty list falls back to the usual local frontend origins — never "*"
 # combined with credentials.
-_DEV_CORS_ORIGINS = ["http://localhost:3000", "http://localhost:5173"]
+_DEV_CORS_ORIGINS = ["http://localhost:3000", "http://localhost:5173", "https://tourwayva.vercel.app"]
 _cors_origins = settings.BACKEND_CORS_ORIGINS or _DEV_CORS_ORIGINS
 
 app.add_middleware(
