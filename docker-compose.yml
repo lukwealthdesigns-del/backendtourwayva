@@ -1,0 +1,120 @@
+version: "3.9"
+
+# Local development stack. Supabase Postgres/Storage/Auth are used in
+# staging/production — this compose file substitutes a plain local
+# Postgres + Redis so the API can run end-to-end without needing a
+# live Supabase project just to develop against.
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/tourwayva
+      SYNC_DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/tourwayva
+      REDIS_URL: redis://redis:6379/0
+      # ClamAV sidecar (below) — set here rather than only in .env.example so
+      # malware scanning (Master Prompt §42, §108) is ON by default for
+      # anyone running `docker compose up`, including for the legacy
+      # OLE Office attachments (.doc/.xls/.ppt) that now fail CLOSED without
+      # a reachable scanner (see app/utils/files.is_legacy_ole_office_mime).
+      # Override CLAMAV_HOST="" in .env to disable.
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      clamav:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  worker:
+    build: .
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/tourwayva
+      SYNC_DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/tourwayva
+      REDIS_URL: redis://redis:6379/0
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      clamav:
+        condition: service_healthy
+    volumes:
+      - .:/app
+
+  # Exactly ONE beat instance: it only decides WHEN scheduled jobs are due and hands them to the workers
+  # (payment reconciliation, lifecycle notices, retention, daily metrics, rate warming). Scaling the
+  # `worker` service up is fine; scaling `beat` up would queue every job twice (the jobs are idempotent
+  # and lock-protected, so it is harmless but wasteful).
+  beat:
+    build: .
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel=info", "-s", "/tmp/celerybeat-schedule"]
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+    volumes:
+      - .:/app
+
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tourwayva
+    ports:
+      - "5432:5432"
+    volumes:
+      - tourwayva_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  # Malware scanning sidecar (Master Prompt §42 "malware/security scanning
+  # where available", §108 "never pretend"). mkodockx/docker-clamav ships a
+  # ready-to-run clamd + freshclam; the official clamav/clamav image works
+  # too but needs its own healthcheck/freshclam wiring — this one keeps the
+  # compose file simple. First boot downloads virus definitions (a minute
+  # or two) before the healthcheck goes green.
+  clamav:
+    image: mkodockx/docker-clamav:alpine
+    restart: unless-stopped
+    ports:
+      - "3310:3310"
+    volumes:
+      - tourwayva_clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w 3 localhost 3310 | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  tourwayva_pg_data:
+  tourwayva_clamav_data:

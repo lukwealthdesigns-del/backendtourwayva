@@ -1,0 +1,20 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = ["app/db/migrations/versions", "tests/__pycache__"]
+
+[tool.ruff.lint]
+# Deliberately lean: this codebase already annotates intentional broad
+# excepts with `# noqa: BLE001` at call sites (provider resilience,
+# best-effort analytics/notifications) rather than disabling the rule
+# globally, so BLE001 stays enabled.
+select = ["E", "F", "W", "B", "BLE"]
+ignore = [
+  "E501",  # line length is enforced by the formatter, not the linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["BLE001"]
+
+[tool.ruff.format]
+quote-style = "double"
