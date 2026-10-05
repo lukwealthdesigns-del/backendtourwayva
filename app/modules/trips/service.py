@@ -18,9 +18,9 @@ from typing import Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import TripMemberRole, TripStatus
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from app.db.models.trip import Trip, TripDay, TripMember
-from app.modules.trips.schemas import TripCreateRequest
+from app.modules.trips.schemas import TripCreateRequest, TripUpdateRequest
 from app.repositories.trip_repository import TripRepository
 
 
@@ -72,6 +72,46 @@ class TripService:
 
     async def list_trips_with_membership(self, user_id: uuid.UUID) -> list[tuple[Trip, TripMember]]:
         return await self.repo.list_trips_with_membership(user_id)
+
+    async def update_trip(self, *, trip_id: uuid.UUID, user_id: uuid.UUID, payload: TripUpdateRequest) -> Trip:
+        """Edit a trip's basics (owner/editor). Dates and destination are locked once an itinerary exists or while one is
+        being generated; changing dates on an empty draft re-creates its (empty) days."""
+        from app.modules.planning.jobs import JobStore
+
+        trip = await self.get_trip_authorized(trip_id=trip_id, user_id=user_id, require_editor=True)
+        changes = payload.model_dump(exclude_unset=True)
+
+        structural = {"destination", "start_date", "end_date"} & changes.keys()
+        new_start = changes.get("start_date", trip.start_date)
+        new_end = changes.get("end_date", trip.end_date)
+        dates_changed = (new_start, new_end) != (trip.start_date, trip.end_date)
+        if new_end < new_start:
+            raise ValidationAppError("end_date cannot be before start_date.")
+        if (new_end - new_start).days > 90:
+            raise ValidationAppError("Trips longer than 90 days are not supported yet.")
+
+        if structural and (dates_changed or changes.get("destination", trip.destination) != trip.destination):
+            if await JobStore.trip_locked(trip.id):
+                raise ConflictError("This trip is being generated right now. Wait for it to finish, then try again.")
+            if await self.repo.list_items_for_trip(trip.id):
+                raise ConflictError(
+                    "Dates and destination can't change once the trip has an itinerary. Create a new trip for different "
+                    "dates or a different place.", details={"reason": "itinerary_exists"},
+                )
+
+        for field_name, value in changes.items():
+            setattr(trip, field_name, value)
+
+        if dates_changed:
+            for day in await self.repo.list_days_for_trip(trip.id):
+                await self.db.delete(day)
+            await self.db.flush()
+            for day_number in range((new_end - new_start).days + 1):
+                await self.repo.add_day(TripDay(trip_id=trip.id, day_number=day_number + 1, date=new_start + timedelta(days=day_number)))
+
+        await self.repo.save_trip(trip)
+        await self.db.commit()
+        return trip
 
     async def set_archived(self, *, trip_id: uuid.UUID, user_id: uuid.UUID, archived: bool) -> tuple[Trip, TripMember]:
         """Archive/unarchive a trip FOR THIS MEMBER ONLY. Any member may do it (it is a personal

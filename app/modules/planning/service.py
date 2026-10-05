@@ -81,6 +81,11 @@ def merge_preferences(
     return merged
 
 
+class GenerationCancelled(Exception):
+    """Raised between workflow steps when the user asked to stop. Nothing is persisted before the final step, so a
+    cancelled generation leaves the trip exactly as it was."""
+
+
 class PlanningService:
     def __init__(self, db: AsyncSession, *, runner: Optional[Runner] = None, ports_factory: Optional[Callable] = None):
         self.db = db
@@ -172,12 +177,28 @@ class PlanningService:
         await self.trips.get_trip_authorized(trip_id=trip_id, user_id=user.id)   # still a member of the trip
         return public_job(job)
 
+    async def cancel_job(self, *, trip_id: uuid.UUID, job_id: uuid.UUID, user: User) -> dict[str, Any]:
+        """Stop a queued or running generation. Takes effect at the next step boundary (a model call already in flight
+        finishes first, but its result is discarded). Idempotent: cancelling a finished job just returns it."""
+        job = await JobStore.get(job_id)
+        if job is None or job["user_id"] != str(user.id) or job["trip_id"] != str(trip_id):
+            raise NotFoundError("Generation job not found.")
+        await self.trips.get_trip_authorized(trip_id=trip_id, user_id=user.id, require_editor=True)
+        if job["status"] in ("queued", "running"):
+            await JobStore.request_cancel(job["job_id"])
+            if job["status"] == "queued":
+                # No worker has picked it up yet: finish it here so the client sees "cancelled" immediately.
+                job = await self._finish(job, cancelled=True)
+        return public_job(job)
+
     async def run_job(self, job_id: uuid.UUID | str) -> dict[str, Any]:
         job = await JobStore.get(job_id)
         if job is None:
             raise NotFoundError("Generation job not found.")
-        if job["status"] in ("succeeded", "failed"):
+        if job["status"] in ("succeeded", "failed", "cancelled"):
             return job                                    # already done: safe to call again
+        if await JobStore.cancel_requested(job["job_id"]):
+            return await self._finish(job, cancelled=True)   # cancelled while still queued: never starts
         trip_id = uuid.UUID(job["trip_id"])
 
         if not await JobStore.acquire_trip_lock(trip_id, job["job_id"]):
@@ -194,6 +215,10 @@ class PlanningService:
             if state.get("error"):
                 return await self._finish(job, error=state["error"])
             return await self._finish(job, result=state["result"])
+        except GenerationCancelled:
+            await self.db.rollback()
+            logger.info("planning_job_cancelled", job_id=str(job["job_id"]))
+            return await self._finish(job, cancelled=True)
         except AppError as exc:
             await self.db.rollback()
             return await self._finish(job, error={"code": exc.error_code, "message": exc.message, "retryable": False})
@@ -264,6 +289,12 @@ class PlanningService:
         stage = NODE_STAGE.get(node)
 
         async def wrapped(state: dict[str, Any]) -> dict[str, Any]:
+            try:
+                stop = await JobStore.cancel_requested(job["job_id"])
+            except Exception:  # noqa: BLE001 - if Redis hiccups we keep going rather than fail the generation
+                stop = False
+            if stop:
+                raise GenerationCancelled()
             if stage and (job.get("progress") or {}).get("stage") != stage:
                 try:
                     job["progress"] = progress_for(stage)
@@ -283,10 +314,11 @@ class PlanningService:
 
     @staticmethod
     async def _finish(
-        job: dict[str, Any], *, result: Optional[dict[str, Any]] = None, error: Optional[dict[str, Any]] = None
+        job: dict[str, Any], *, result: Optional[dict[str, Any]] = None, error: Optional[dict[str, Any]] = None,
+        cancelled: bool = False,
     ) -> dict[str, Any]:
-        job["status"] = "succeeded" if error is None else "failed"
-        if error is None:
+        job["status"] = "cancelled" if cancelled else ("succeeded" if error is None else "failed")
+        if error is None and not cancelled:
             job["progress"] = {"stage": "done", "stage_index": len(STAGES), "stage_count": len(STAGES), "percent": 100}
         job["result"], job["error"] = result, error
         job["finished_at"] = datetime.now(timezone.utc).isoformat()

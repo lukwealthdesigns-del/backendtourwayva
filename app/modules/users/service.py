@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.constants import UploadUseCase
+from app.core.constants import OTPPurpose, UploadUseCase
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.db.models.preferences import UserPreferences
@@ -50,6 +50,41 @@ class UserService:
         except IntegrityError as exc:
             await self.db.rollback()
             raise ConflictError("This username is already taken.") from exc
+        return user
+
+    async def request_phone_change(self, user: User, new_e164: str) -> None:
+        """Validates the new number and emails a one-time code to the account's email address."""
+        from app.modules.auth.otp_service import OTPService
+
+        if new_e164 == user.phone_number_e164:
+            raise ConflictError("That is already your phone number.")
+        if await self.user_repo.phone_exists(new_e164):
+            raise ConflictError("This phone number is already in use.")
+        await OTPService(self.db).issue_and_send(
+            user_id=user.id, email=user.email, first_name=user.first_name,
+            purpose=OTPPurpose.PHONE_VERIFICATION, enforce_cooldown=True,
+        )
+        await self.db.commit()
+
+    async def confirm_phone_change(self, user: User, new_e164: str, code: str) -> User:
+        """Verifies the emailed code, then switches the number. The number is re-validated and re-checked for
+        uniqueness here (not trusted from step 1), and the unique index is the final guard against a race."""
+        from app.modules.auth.otp_service import OTPService
+        from app.utils.phone import parse_and_validate_phone
+
+        if await self.user_repo.phone_exists(new_e164):
+            raise ConflictError("This phone number is already in use.")
+        await OTPService(self.db).verify(user_id=user.id, purpose=OTPPurpose.PHONE_VERIFICATION, submitted_code=code)
+        parsed = parse_and_validate_phone(new_e164)
+        user.phone_number_e164 = parsed.e164
+        user.phone_country_code = parsed.country_calling_code
+        user.phone_region_code = parsed.region_code
+        try:
+            await self.user_repo.save(user)
+            await self.db.commit()
+        except IntegrityError as exc:
+            await self.db.rollback()
+            raise ConflictError("This phone number is already in use.") from exc
         return user
 
     async def remove_avatar(self, user: User) -> User:

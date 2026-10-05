@@ -46,7 +46,7 @@ INTENT_FEATURE: dict[Intent, FeatureFlag] = {
 
 _READ_ONLY_GENERAL = (
     "search_travel_knowledge", "search_places", "geocode", "get_weather", "convert_currency",
-    "get_my_memories", "calculate_route", "get_saved_places",
+    "get_my_memories", "calculate_route", "get_saved_places", "show_place_photos",
 )
 
 # Tools each intent may use. A tool the model asks for that is not listed is
@@ -55,7 +55,7 @@ _READ_ONLY_GENERAL = (
 INTENT_TOOLS: dict[Intent, tuple[str, ...]] = {
     Intent.GENERAL_TRAVEL: _READ_ONLY_GENERAL,
     Intent.TRIP_QUERY: ("get_trip", "get_trip_itinerary", "get_weather", "convert_currency",
-                        "search_travel_knowledge", "get_my_memories", "calculate_route"),
+                        "search_travel_knowledge", "get_my_memories", "calculate_route", "show_place_photos"),
     Intent.ITINERARY_EDIT: ("get_trip", "get_trip_itinerary", "propose_add_trip_item", "propose_update_trip_item",
                             "propose_delete_trip_item", "propose_itinerary_revision", "create_trip_version",
                             "search_activities", "search_places", "search_hotels", "geocode",
@@ -64,12 +64,12 @@ INTENT_TOOLS: dict[Intent, tuple[str, ...]] = {
                           "calculate_route", "save_place"),
     Intent.FLIGHT_SEARCH: ("search_flights", "get_trip", "convert_currency", "get_my_memories", "add_flight_to_trip"),
     Intent.ACTIVITY_SEARCH: ("search_activities", "search_places", "get_trip", "geocode", "get_weather",
-                             "get_my_memories", "search_travel_knowledge", "calculate_route", "save_place"),
+                             "get_my_memories", "search_travel_knowledge", "calculate_route", "save_place", "show_place_photos"),
     Intent.WEATHER_QUERY: ("get_weather", "geocode", "get_trip"),
     Intent.CURRENCY_QUERY: ("convert_currency",),
-    Intent.TRAVEL_HISTORY: ("get_trip_history", "get_my_memories", "get_saved_places"),
+    Intent.TRAVEL_HISTORY: ("get_trip_history", "get_my_memories", "get_saved_places", "show_place_photos"),
     Intent.DISCOVERY: ("search_destinations", "search_travel_knowledge", "convert_currency", "get_weather",
-                       "get_my_memories", "get_my_profile", "save_place"),
+                       "get_my_memories", "get_my_profile", "save_place", "show_place_photos"),
     Intent.ACCOUNT_QUERY: ("get_my_profile", "get_my_memories"),
     Intent.UNKNOWN: _READ_ONLY_GENERAL + ("get_trip", "get_trip_itinerary", "get_my_profile"),  # save_place excluded when unsure
 }

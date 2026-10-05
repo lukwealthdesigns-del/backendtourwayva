@@ -127,6 +127,8 @@ class Settings(BaseSettings):
     # "inline": run inside the request (development/tests only — it can take a minute).
     # Unset => background in staging/production, inline elsewhere.
     PLANNING_EXECUTION: Optional[str] = None
+    # Smallest trip budget we accept (US dollars). Below this a plan cannot cover even the basics. 0 disables the check.
+    MIN_TRIP_BUDGET_USD: float = 100.0
     PLANNING_JOB_TTL_SECONDS: int = 60 * 60 * 24
     PLANNING_LOCK_TTL_SECONDS: int = 60 * 10
     # A generated itinerary is shown as "upcoming" when the trip starts within this many days,
@@ -207,6 +209,10 @@ class Settings(BaseSettings):
 
     # --- AI (Phase 4, scaffolded) ---
     OPENAI_API_KEY: str = ""
+    # Spoken Companion replies (text-to-speech)
+    TTS_MODEL: str = "tts-1"
+    TTS_VOICE: str = "alloy"
+    TTS_MAX_CHARS: int = 3000
     AI_PRIMARY_MODEL: str = "gpt-4.1"
     AI_FALLBACK_MODEL: str = "gpt-4.1-mini"
     # Cost-aware routing (Master Prompt §97): cheap/fast model for classification,

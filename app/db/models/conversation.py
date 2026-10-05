@@ -16,7 +16,7 @@ import uuid
 from typing import Optional
 
 from sqlalchemy import Enum, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.constants import MessageRole
@@ -47,3 +47,5 @@ class Message(UUIDPKMixin, TimestampMixin, Base):
     role: Mapped[MessageRole] = mapped_column(Enum(MessageRole, name="message_role_enum", values_callable=enum_values), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     model_used: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Structured extras for an assistant reply: {"trip_ids": [...], "images": [...]} (see CompanionService._meta_from).
+    meta: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)

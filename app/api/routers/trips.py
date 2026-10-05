@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, require_feature
+from app.modules.currency.budget_policy import ensure_budget_is_realistic
 from app.core.constants import FeatureFlag
 from app.core.exceptions import NotFoundError
 from app.db.models.user import User
@@ -32,6 +33,7 @@ from app.modules.itinerary.flight_booking_service import FlightBookingService
 from app.modules.itinerary.hotel_replacement_service import HotelReplacementService
 from app.modules.itinerary.service import ItineraryService
 from app.modules.trips.schemas import (
+    TripUpdateRequest,
     AddFlightRequest,
     AddFlightResponse,
     BookingClickRequest,
@@ -52,6 +54,23 @@ class TripItemWriteResponse(TripItemResponse):
     validation: ItineraryValidationResult
 
 
+@router.patch("/{trip_id}", response_model=TripResponse, dependencies=[Depends(require_feature(FeatureFlag.PLANNER))])
+async def update_trip(
+    trip_id: uuid.UUID,
+    payload: TripUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Edit a trip's basics (owner/editor): title, origin, travelers, budget always; destination and dates only while the
+    trip has no itinerary and is not being generated (409 `itinerary_exists` / generation-in-progress otherwise)."""
+    if payload.budget_amount is not None:
+        await ensure_budget_is_realistic(payload.budget_amount, payload.budget_currency or (await TripService(db).get_trip_authorized(trip_id=trip_id, user_id=current_user.id)).budget_currency)
+    service = TripService(db)
+    trip = await service.update_trip(trip_id=trip_id, user_id=current_user.id, payload=payload)
+    membership = await service.repo.get_membership(trip.id, current_user.id)
+    return await trip_response(trip, membership=membership, user=current_user)
+
+
 @router.post("", response_model=TripResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_feature(FeatureFlag.PLANNER))])
 async def create_trip(
     payload: TripCreateRequest,
@@ -60,6 +79,7 @@ async def create_trip(
 ):
     """Creates the trip, makes the caller its owner, and scaffolds one
     empty TripDay per calendar day in the date range."""
+    await ensure_budget_is_realistic(payload.budget_amount, payload.budget_currency)
     service = TripService(db)
     trip = await service.create_trip(owner_id=current_user.id, payload=payload)
     membership = await service.repo.get_membership(trip.id, current_user.id)

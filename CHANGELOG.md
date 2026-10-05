@@ -1,5 +1,56 @@
 # Changelog
 
+## Structured chat cards, photos, spoken replies, destination guides, trip editing, minimum budget
+
+One new Alembic migration: `0027_message_meta`. Run `alembic upgrade head`.
+
+### Added
+- **`messages.meta` (JSONB)** and `meta` on `MessageResponse`: `{"trip_ids": [...], "images": [...]}`. Trip tools
+  (`get_trip`, `get_trip_itinerary`, `get_trip_history`, last-trip lookup) record which of the user's trips an answer drew
+  on, so the app can show trip cards without guessing from text. NULL for old messages and plain answers.
+- **Companion tool `show_place_photos`** (1-4 distinct places): real photos from the image provider via the cached
+  ImageService (never from the model), de-duplicated, attribution fields included. Allowed only for general/discovery/
+  trip/activity/history intents; read-only. Tests: `tests/unit/test_companion_cards.py`.
+- **`POST /companion/messages/{message_id}/speech`** returns MP3 of one of the caller's own assistant replies (OpenAI TTS
+  behind a provider interface; markdown reduced to plain speech, capped at `TTS_MAX_CHARS`). A message id, never free text,
+  so it cannot be used as a general TTS API; audio is never stored. 503 `provider_unavailable` when not configured. 60/h/user,
+  VOICE + COMPANION flags. New settings: `TTS_MODEL`, `TTS_VOICE`, `TTS_MAX_CHARS`. Tests: `tests/unit/test_speech_service.py`.
+- **`POST /destinations/guide`** `{name, country?}`: AI-written guide (overview, best time, suggested stay, rough daily budget
+  in USD, highlights, languages, currency, tips) for ANY place. The place is verified with the geocoder first (404 otherwise),
+  the model output is validated/clamped field by field, results are cached 30 days, 20/h/user, DISCOVER flag; labelled
+  `source: "ai"` with a disclaimer. Tests: `tests/unit/test_destination_guide.py`.
+- **`PATCH /trips/{trip_id}`** edits title, origin, travelers, budget (always) and destination/dates (only while there is no
+  itinerary and no generation running; 409 `itinerary_exists` otherwise; changing dates on an empty draft re-creates its days).
+  Tests: `tests/unit/test_trip_update.py`.
+- **Server-side minimum trip budget** (`MIN_TRIP_BUDGET_USD`, default 100, 0 disables) on trip create/update and Discover search:
+  422 `budget_too_low` with `details.min_amount/currency`. Converted with the same two-significant-digit rounding the app shows;
+  fails open if the exchange rate is unavailable. Tests: `tests/unit/test_budget_policy.py`.
+
+### Note (correction)
+- Hotel search already resolves the IATA city code itself when none is given (Amadeus location lookup, cached) inside the
+  planning workflow, so no endpoint was needed. Earlier notes claiming otherwise were wrong; the web app now says so.
+
+## Cancel generation, notification management, login by username, phone change
+
+### Added
+- **`POST /trips/{trip_id}/generate/{job_id}/cancel`** stops a queued or running generation (editor/owner only,
+  idempotent, 30/h/user). The request is stored under its own Redis key and checked before each workflow step, so it
+  takes effect at the next step boundary; nothing is persisted before the last step, so the trip is left unchanged.
+  New job status `cancelled`. A model call already in flight finishes first but its result is discarded.
+  Tests: `tests/unit/test_planning_cancel.py`.
+- **Notifications:** `POST /notifications/read-all` -> `{updated}`, `DELETE /notifications/{id}` (204; 404 for unknown or
+  someone else's), `DELETE /notifications` -> `{deleted}`. Ownership is part of the SQL.
+- **Login by email OR username:** `POST /auth/login` accepts `identifier` (email, or username with/without a leading @);
+  `email` still works. One error message for "no such account" and "wrong password". Failed attempts are counted
+  against the typed identifier AND the account's email so alternating forms cannot double the guesses.
+  Tests: `tests/unit/test_login_identifier.py`.
+- **Phone number change (OTP-verified):** `POST /users/me/phone/change-request` (new number -> a code is emailed to the
+  account email, 5/h) and `POST /users/me/phone/change-confirm` (number + code -> updated profile, 10/15 min). We have
+  no SMS channel, so the emailed code proves account ownership; the number is re-validated and re-checked for
+  uniqueness at confirm, and the unique index remains the final guard. Uses the existing `phone_verification` OTP
+  purpose (no migration). `PATCH /users/me` still rejects `phone_number` on purpose.
+  Tests: `tests/unit/test_phone_change_schema.py`.
+
 ## Welcome notification and email
 
 ### Added

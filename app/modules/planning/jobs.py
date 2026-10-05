@@ -38,6 +38,7 @@ def progress_for(stage: str) -> dict[str, Any]:
 
 
 _JOB_KEY = "planning:job:{job_id}"
+_CANCEL_KEY = "planning:job:{job_id}:cancel"
 _IDEM_KEY = "planning:idem:{user_id}:{trip_id}:{key}"
 _LOCK_KEY = "planning:lock:{trip_id}"
 _LATEST_KEY = "planning:latest:{trip_id}"
@@ -75,6 +76,16 @@ class JobStore:
         return job
 
     @staticmethod
+    async def request_cancel(job_id: uuid.UUID | str) -> None:
+        """Ask a queued/running job to stop at its next step boundary. A separate key (not a field on the job) so the
+        worker, which re-saves the whole job record as it progresses, cannot overwrite the request."""
+        await CacheService.set_raw(_CANCEL_KEY.format(job_id=job_id), "1", settings.PLANNING_JOB_TTL_SECONDS)
+
+    @staticmethod
+    async def cancel_requested(job_id: uuid.UUID | str) -> bool:
+        return (await CacheService.get_raw(_CANCEL_KEY.format(job_id=job_id))) == "1"
+
+    @staticmethod
     async def claim_idempotency(*, user_id: uuid.UUID, trip_id: uuid.UUID, key: str, job_id: uuid.UUID) -> Optional[str]:
         """Returns the job id of an EARLIER request with the same
         Idempotency-Key (so the caller returns it instead of starting a second
@@ -93,6 +104,11 @@ class JobStore:
             _LOCK_KEY.format(trip_id=trip_id), str(job_id), settings.PLANNING_LOCK_TTL_SECONDS
         )
         return result is not False
+
+    @staticmethod
+    async def trip_locked(trip_id: uuid.UUID | str) -> bool:
+        """True while a generation holds this trip's lock (so edits that would race with it must wait)."""
+        return (await CacheService.get_raw(_LOCK_KEY.format(trip_id=trip_id))) is not None
 
     @staticmethod
     async def release_trip_lock(trip_id: uuid.UUID | str, job_id: uuid.UUID | str) -> None:

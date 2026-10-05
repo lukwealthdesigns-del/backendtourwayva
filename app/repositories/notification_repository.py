@@ -4,7 +4,9 @@ from __future__ import annotations
 import uuid
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from datetime import datetime, timezone
+
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.notification import EmailLog, Notification, NotificationPreference
@@ -30,6 +32,26 @@ class NotificationRepository:
     async def get_notification(self, notification_id: uuid.UUID) -> Optional[Notification]:
         result = await self.db.execute(select(Notification).where(Notification.id == notification_id))
         return result.scalar_one_or_none()
+
+    async def mark_all_read(self, user_id: uuid.UUID) -> int:
+        """Marks every unread notification of the user as read in ONE statement. Returns how many changed."""
+        result = await self.db.execute(
+            update(Notification)
+            .where(Notification.user_id == user_id, Notification.read_at.is_(None))
+            .values(read_at=datetime.now(timezone.utc))
+        )
+        return result.rowcount or 0
+
+    async def delete_for_user(self, notification_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Deletes one notification, but only if it belongs to the user (the ownership check is part of the SQL)."""
+        result = await self.db.execute(
+            delete(Notification).where(Notification.id == notification_id, Notification.user_id == user_id)
+        )
+        return bool(result.rowcount)
+
+    async def delete_all_for_user(self, user_id: uuid.UUID) -> int:
+        result = await self.db.execute(delete(Notification).where(Notification.user_id == user_id))
+        return result.rowcount or 0
 
     async def save_notification(self, notification: Notification) -> Notification:
         await self.db.flush()

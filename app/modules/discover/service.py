@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.currency.budget_policy import ensure_budget_is_realistic
 from app.core.constants import FeatureFlag
 from app.core.exceptions import ProviderUnavailableError, ValidationAppError
 from app.core.logging import get_logger
@@ -63,6 +64,7 @@ class DiscoverService:
         self._runner: Runner = runner or _langgraph_runner
 
     async def search(self, *, user_id: uuid.UUID, payload: DiscoverSearchRequest) -> DiscoverSearchResponse:
+        await ensure_budget_is_realistic(payload.budget_amount, payload.budget_currency)
         ports = self._build_ports(user_id, payload)
         state = await self._runner(build_discover_spec(ports), {"request": payload.model_dump(mode="json")})
 

@@ -90,8 +90,22 @@ class ResendOTPRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    """Sign in with an email address OR a username. `email` is kept so existing clients keep working;
+    new clients send `identifier` (an email, or a username with or without the leading @)."""
+
+    email: Optional[EmailStr] = None
+    identifier: Optional[str] = Field(default=None, min_length=1, max_length=254)
     password: str = Field(..., min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def _need_an_identity(self) -> "LoginRequest":
+        if not (self.identifier or self.email):
+            raise ValueError("Provide an email or a username.")
+        return self
+
+    @property
+    def login_id(self) -> str:
+        return (self.identifier or str(self.email)).strip()
 
 
 class TokenResponse(BaseModel):

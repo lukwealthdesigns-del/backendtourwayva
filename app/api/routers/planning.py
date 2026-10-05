@@ -3,6 +3,7 @@ Itinerary generation endpoints (Master Prompt §13-14).
 
   POST /trips/{trip_id}/generate            start (202 queued / 200 finished inline)
   GET  /trips/{trip_id}/generate/{job_id}   poll a job
+  POST /trips/{trip_id}/generate/{job_id}/cancel   stop a queued/running job
   GET  /trips/{trip_id}/preferences         planner preferences for the trip
   PUT  /trips/{trip_id}/preferences         update them (owner/editor)
 
@@ -76,6 +77,21 @@ async def get_generation_job(
     db: AsyncSession = Depends(get_db),
 ):
     return GenerationJobResponse(**await PlanningService(db).get_job(trip_id=trip_id, job_id=job_id, user=current_user))
+
+
+@router.post(
+    "/{trip_id}/generate/{job_id}/cancel", response_model=GenerationJobResponse,
+    dependencies=[Depends(rate_limit(bucket="planning:cancel", max_requests=30, window_seconds=3600, per="user"))],
+)
+async def cancel_generation_job(
+    trip_id: uuid.UUID,
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stop a queued or running generation. The trip is left unchanged (nothing is saved until the last step). Returns
+    the job: `cancelled`, or `succeeded`/`failed` if it had already finished. Idempotent."""
+    return GenerationJobResponse(**await PlanningService(db).cancel_job(trip_id=trip_id, job_id=job_id, user=current_user))
 
 
 @router.get("/{trip_id}/preferences", response_model=TripPreferencesResponse)

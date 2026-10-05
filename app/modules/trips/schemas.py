@@ -31,6 +31,30 @@ class TripCreateRequest(BaseModel):
         return self
 
 
+class TripUpdateRequest(BaseModel):
+    """Partial update of a trip's basics. Send only what changes. Destination and dates can only change while the trip
+    has no itinerary yet (otherwise the plan would no longer match them); everything else is always editable."""
+
+    model_config = {"extra": "forbid"}
+
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    origin: Optional[str] = Field(default=None, max_length=200)
+    destination: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    travelers: Optional[int] = Field(default=None, ge=1, le=50)
+    budget_amount: Optional[float] = Field(default=None, gt=0)
+    budget_currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "TripUpdateRequest":
+        if not self.model_fields_set:
+            raise ValueError("Send at least one field to change.")
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("end_date cannot be before start_date.")
+        return self
+
+
 class TripGenerationInfo(BaseModel):
     """Where itinerary generation stands for a trip (only present while generating or after a
     failed attempt). `job_id` can be polled at GET /trips/{id}/generate/{job_id}."""

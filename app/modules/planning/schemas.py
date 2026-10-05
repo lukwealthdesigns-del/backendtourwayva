@@ -95,7 +95,7 @@ class JobProgress(BaseModel):
 class GenerationJobResponse(BaseModel):
     job_id: uuid.UUID
     trip_id: uuid.UUID
-    status: Literal["queued", "running", "succeeded", "failed"]
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     created_at: datetime
     finished_at: Optional[datetime] = None
     result: Optional[dict[str, Any]] = None

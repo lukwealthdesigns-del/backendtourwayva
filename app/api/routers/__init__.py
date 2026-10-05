@@ -13,6 +13,7 @@ from app.api.routers.entitlements import router as entitlements_router
 from app.api.routers.flights import router as flights_router
 from app.api.routers.hotels import router as hotels_router
 from app.api.routers.images import router as images_router
+from app.api.routers.destinations import router as destinations_router
 from app.api.routers.location import router as location_router
 from app.api.routers.maps import router as maps_router
 from app.api.routers.memory import router as memory_router
@@ -39,6 +40,7 @@ api_v1_router.include_router(attachments_router)
 
 # --- Phase 2: Core Travel ---
 api_v1_router.include_router(location_router)
+api_v1_router.include_router(destinations_router)
 api_v1_router.include_router(currency_router)
 api_v1_router.include_router(discover_router)
 api_v1_router.include_router(weather_router)

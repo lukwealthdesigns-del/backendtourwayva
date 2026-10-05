@@ -214,6 +214,7 @@ class AuthService:
     # Login
     # ------------------------------------------------------------------
     async def login(self, *, email: str, password: str, ip_address: Optional[str] = None, user_agent: Optional[str] = None) -> User:
+        """`email` may be an email address or a username (with or without a leading @)."""
         from app.core.rate_limit import clear_failed_logins, is_login_locked_out, record_failed_login
         from app.modules.security.service import SecurityService
 
@@ -222,19 +223,31 @@ class AuthService:
         if await security_service.is_ip_blocked(ip_address):
             raise ForbiddenError("Access from this network is currently blocked.")
 
-        if await is_login_locked_out(email):
+        email = email.strip()
+        by_username = "@" not in email.lstrip("@") or email.startswith("@")
+        lockout_key = email.lower().lstrip("@") if by_username else email.lower()   # same bucket however it is typed
+
+        if await is_login_locked_out(lockout_key):
             raise RateLimitedError(
                 "Too many failed login attempts. Please wait 15 minutes and try again, "
                 "or reset your password."
             )
 
-        user = await self.user_repo.get_by_email(email)
+        user = await (self.user_repo.get_by_username(email.lstrip("@")) if by_username else self.user_repo.get_by_email(email))
+        # Failures count against the ACCOUNT (its email) as well as the identifier typed, so alternating between the
+        # email and the username cannot double the number of guesses.
+        account_key = user.email.lower() if user is not None else None
+        if account_key and account_key != lockout_key and await is_login_locked_out(account_key):
+            raise RateLimitedError("Too many failed login attempts. Please wait 15 minutes and try again, or reset your password.")
         if user is None or user.password_hash is None or not verify_password(password, user.password_hash):
-            await record_failed_login(email)
+            await record_failed_login(lockout_key)
+            if account_key and account_key != lockout_key:
+                await record_failed_login(account_key)
             await security_service.record_login_attempt(
-                email=email, ip_address=ip_address, success=False, user_agent=user_agent
+                email=email[:254], ip_address=ip_address, success=False, user_agent=user_agent
             )
-            raise UnauthorizedError("Invalid email or password.")
+            # One message for "no such account" and "wrong password", whichever identifier was used.
+            raise UnauthorizedError("Invalid email/username or password.")
 
         if not user.is_active or user.status == UserStatus.PENDING:
             raise ForbiddenError(
@@ -245,9 +258,11 @@ class AuthService:
         if user.status in (UserStatus.SUSPENDED, UserStatus.DELETED):
             raise ForbiddenError("This account is not available.")
 
-        await clear_failed_logins(email)
+        await clear_failed_logins(lockout_key)
+        if account_key and account_key != lockout_key:
+            await clear_failed_logins(account_key)
         await security_service.record_login_attempt(
-            email=email, ip_address=ip_address, success=True, user_agent=user_agent
+            email=user.email, ip_address=ip_address, success=True, user_agent=user_agent
         )
 
         if settings.SUSPICIOUS_LOGIN_DETECTION:

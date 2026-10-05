@@ -36,7 +36,7 @@ honest about rather than paper over (see companion/service.py).
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Optional
 
@@ -58,17 +58,46 @@ from app.modules.trips.service import TripService
 from app.modules.weather.service import WeatherService
 
 
+_MAX_CARD_TRIPS = 8
+_MAX_PHOTOS = 4
+
+
 @dataclass(frozen=True)
 class ToolExecutionContext:
     db: AsyncSession
     user: User
     conversation_id: uuid.UUID
     llm: Any = None   # injected LLMProvider for tools that call the model (revisions); None => default provider
+    # Filled in by tools while a reply is produced, then stored on the assistant message as `meta`: the trips the
+    # answer drew on (the app shows cards for the ones the reply mentions) and photos to display with it.
+    collected: dict = field(default_factory=lambda: {"trip_ids": [], "images": []})
+
+    def note_trip(self, trip_id: Any) -> None:
+        tid = str(trip_id)
+        if tid not in self.collected["trip_ids"] and len(self.collected["trip_ids"]) < _MAX_CARD_TRIPS:
+            self.collected["trip_ids"].append(tid)
 
 
 # --- OpenAI function-calling tool schemas ---
 
 TOOL_SCHEMAS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "show_place_photos",
+            "description": (
+                "Show the user real photos of places. Use it when they ask to see pictures, or when a photo would "
+                "clearly help (a destination, landmark, hotel area or dish). Pass 1-4 DIFFERENT, specific names, "
+                "each with its city or country (e.g. 'Eiffel Tower Paris', 'Louvre Museum Paris'). The photos appear "
+                "under your reply automatically."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"queries": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 4}},
+                "required": ["queries"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -509,6 +538,7 @@ async def _get_trip(args: dict, ctx: ToolExecutionContext) -> dict:
     # Re-verified here regardless of what the model claims - this is
     # the section-40 checkpoint. ctx.user.id comes from the JWT, never the LLM.
     trip = await TripService(ctx.db).get_trip_authorized(trip_id=trip_id, user_id=ctx.user.id)
+    ctx.note_trip(trip.id)
     return {
         "title": trip.title,
         "destination": trip.destination,
@@ -525,6 +555,7 @@ async def _get_trip(args: dict, ctx: ToolExecutionContext) -> dict:
 async def _get_trip_itinerary(args: dict, ctx: ToolExecutionContext) -> dict:
     trip_id = _parse_uuid(args.get("trip_id"), "trip_id")
     await TripService(ctx.db).get_trip_authorized(trip_id=trip_id, user_id=ctx.user.id)
+    ctx.note_trip(trip_id)
     days = await ItineraryService(ctx.db).get_full_itinerary(trip_id)
     return {
         "days": [
@@ -711,6 +742,8 @@ async def _get_trip_history(args: dict, ctx: ToolExecutionContext) -> dict:
     if destination:
         try:
             result = await service.find_last_trip_to(user_id=ctx.user.id, destination_query=str(destination))
+            if getattr(result, "trip_id", None):
+                ctx.note_trip(result.trip_id)
             return {
                 "destination": result.destination,
                 "start_date": result.start_date.isoformat(),
@@ -720,6 +753,9 @@ async def _get_trip_history(args: dict, ctx: ToolExecutionContext) -> dict:
             return {"error": exc.message}
 
     history = await service.get_my_history(ctx.user.id)
+    for d in history:
+        if getattr(d, "trip_id", None):
+            ctx.note_trip(d.trip_id)
     return {
         "trips": [
             {"destination": d.destination, "start_date": d.start_date.isoformat(), "end_date": d.end_date.isoformat()}
@@ -864,7 +900,41 @@ async def _add_flight_to_trip(args: dict, ctx: ToolExecutionContext) -> dict:
            "price_verified": result.price_verified, "verification_note": result.verification_note}
 
 
+async def _show_place_photos(args: dict, ctx: ToolExecutionContext) -> dict:
+    """Attach up to 4 photos (one per distinct place/topic) to the reply. Photos come from the image provider through
+    the same cached ImageService as the rest of the app, never from the model, so nothing is invented."""
+    from app.modules.images.service import ImageService
+
+    raw = args.get("queries") or ([args["query"]] if args.get("query") else [])
+    queries = [q.strip() for q in raw if isinstance(q, str) and 2 <= len(q.strip()) <= 120][:_MAX_PHOTOS]
+    if not queries:
+        return {"error": "Provide 1-4 place names or topics in 'queries'."}
+    service = ImageService()
+    shown, missing = [], []
+    for q in queries:
+        if len(ctx.collected["images"]) >= _MAX_PHOTOS:
+            break
+        try:
+            img = await service.get_or_search(q)
+        except Exception:  # noqa: BLE001 - a missing photo must never fail the answer
+            missing.append(q)
+            continue
+        if any(i["url"] == img.url for i in ctx.collected["images"]):
+            continue
+        ctx.collected["images"].append({
+            "url": img.url, "thumbnail_url": img.thumbnail_url, "alt": q,
+            "photographer_name": img.photographer_name, "photographer_profile_url": img.photographer_profile_url,
+            "attribution_required": img.attribution_required, "provider": img.provider,
+        })
+        shown.append(q)
+    return {
+        "attached": shown, "unavailable": missing,
+        "note": "These photos are shown to the user automatically under your reply. Do not paste links or describe them as attachments you cannot see.",
+    }
+
+
 _HANDLERS = {
+    "show_place_photos": _show_place_photos,
     "get_trip_history": _get_trip_history,
     "get_my_profile": _get_my_profile,
     "get_my_memories": _get_my_memories,

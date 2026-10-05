@@ -53,6 +53,31 @@ class MePublic(UserPublic):
         })
 
 
+class PhoneChangeRequest(BaseModel):
+    """Step 1 of changing the phone number: the new number, as a full international number. A code is emailed to the
+    ACCOUNT's email address (we have no SMS channel), which proves it is really the owner changing it."""
+
+    model_config = {"extra": "forbid"}
+
+    phone_number: str = Field(..., min_length=5, max_length=32, description="e.g. +2348012345678")
+
+    @field_validator("phone_number")
+    @classmethod
+    def _valid_phone(cls, v: str) -> str:
+        from app.utils.phone import InvalidPhoneNumberError, parse_and_validate_phone
+
+        try:
+            return parse_and_validate_phone(v).e164
+        except InvalidPhoneNumberError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class PhoneChangeConfirm(PhoneChangeRequest):
+    """Step 2: the same number plus the emailed code."""
+
+    code: str = Field(..., min_length=4, max_length=10)
+
+
 class ProfileUpdateRequest(BaseModel):
     """Only the fields listed here can ever be changed through the profile
     endpoint. Anything else (email, phone, role, is_active, status, ...) is

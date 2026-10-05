@@ -91,6 +91,22 @@ class NotificationService:
         await self.db.commit()
         return notification
 
+    async def mark_all_read(self, user_id: uuid.UUID) -> int:
+        changed = await self.repo.mark_all_read(user_id)
+        await self.db.commit()
+        return changed
+
+    async def delete(self, *, notification_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Another user's id and an unknown id both answer 404, so ids cannot be probed."""
+        if not await self.repo.delete_for_user(notification_id, user_id):
+            raise NotFoundError("Notification not found.")
+        await self.db.commit()
+
+    async def clear_all(self, user_id: uuid.UUID) -> int:
+        removed = await self.repo.delete_all_for_user(user_id)
+        await self.db.commit()
+        return removed
+
     async def get_preferences(self, user_id: uuid.UUID) -> NotificationPreference:
         prefs = await self._get_or_create_preferences(user_id)
         await self.db.commit()

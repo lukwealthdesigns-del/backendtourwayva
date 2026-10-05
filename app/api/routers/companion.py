@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, rate_limit, require_feature
@@ -22,6 +22,7 @@ from app.modules.companion.schemas import (
     VoiceMessageResponse,
 )
 from app.modules.companion.service import CompanionService
+from app.modules.companion.speech_service import SpeechService
 
 router = APIRouter(prefix="/companion", tags=["Companion"])
 
@@ -141,6 +142,21 @@ async def reject_change(
 
     change = await PendingChangeService(db).reject(change_id=change_id, actor_id=current_user.id)
     return PendingChangeResponse.model_validate(change)
+
+
+@router.post(
+    "/messages/{message_id}/speech",
+    dependencies=[Depends(require_feature(FeatureFlag.COMPANION)), Depends(require_feature(FeatureFlag.VOICE)),
+                  Depends(rate_limit(bucket="companion:speech", max_requests=60, window_seconds=3600, per="user"))],
+    responses={200: {"content": {"audio/mpeg": {}}, "description": "The reply, spoken (MP3)."}},
+)
+async def speak_message(
+    message_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Reads one of your own assistant replies aloud and returns MP3 audio. Generated on demand and never stored.
+    503 `provider_unavailable` when no speech provider is configured (the app then falls back to the browser's voice)."""
+    audio, content_type = await SpeechService(db).speak_message(message_id=message_id, user_id=current_user.id)
+    return Response(content=audio, media_type=content_type, headers={"Cache-Control": "private, max-age=3600"})
 
 
 @router.post(

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,7 @@ class MessageResponse(BaseModel):
     content: str
     model_used: Optional[str] = None
     created_at: datetime
+    meta: Optional[dict[str, Any]] = None     # {"trip_ids": [...], "images": [{url, thumbnail_url, alt, ...}]}
 
     # `model_used` starts with pydantic's reserved "model_" prefix; opt out of the warning.
     model_config = {"from_attributes": True, "protected_namespaces": ()}

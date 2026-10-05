@@ -108,7 +108,7 @@ async def login(
     user_agent: str | None = Header(default=None),
 ):
     service = AuthService(db)
-    user = await service.login(email=payload.email, password=payload.password, ip_address=client_ip, user_agent=user_agent)
+    user = await service.login(email=payload.login_id, password=payload.password, ip_address=client_ip, user_agent=user_agent)
     access, refresh = await service.start_session(user, ip_address=client_ip, user_agent=user_agent)
     return _auth_success(user, access, refresh)
 

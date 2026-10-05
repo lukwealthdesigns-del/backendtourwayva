@@ -17,6 +17,8 @@ from app.modules.admin.messaging_service import AdminMessagingService
 from app.modules.admin.schemas import AdminMessageResponse
 from app.modules.users.account_service import AccountService
 from app.modules.users.schemas import (
+    PhoneChangeConfirm,
+    PhoneChangeRequest,
     DeleteAccountConfirmRequest,
     MePublic,
     OnboardingCompleteRequest,
@@ -36,6 +38,29 @@ async def get_me(current_user: User = Depends(get_current_user)):
     derived entirely from the verified JWT — never from a
     client-supplied user ID."""
     return MePublic.from_user(current_user)
+
+
+@router.post(
+    "/me/phone/change-request", status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(rate_limit(bucket="users:phone-change-request", max_requests=5, window_seconds=3600, per="user"))],
+)
+async def request_phone_change(
+    payload: PhoneChangeRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Start changing your phone number: emails a one-time code to your account email."""
+    await UserService(db).request_phone_change(current_user, payload.phone_number)
+
+
+@router.post(
+    "/me/phone/change-confirm", response_model=MePublic,
+    dependencies=[Depends(rate_limit(bucket="users:phone-change-confirm", max_requests=10, window_seconds=900, per="user"))],
+)
+async def confirm_phone_change(
+    payload: PhoneChangeConfirm, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+):
+    """Finish changing your phone number with the emailed code."""
+    user = await UserService(db).confirm_phone_change(current_user, payload.phone_number, payload.code)
+    return MePublic.from_user(user)
 
 
 @router.patch("/me", response_model=MePublic)

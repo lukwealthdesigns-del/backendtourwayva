@@ -132,7 +132,7 @@ class CompanionService:
         answered_at = reply_timestamp(asked_at)
         assistant_message = Message(
             conversation_id=conversation.id, role=MessageRole.ASSISTANT, content=reply,
-            model_used=state.get("model_used"), created_at=answered_at,
+            model_used=state.get("model_used"), created_at=answered_at, meta=self._meta_from(getattr(self, "_collected", None)),
         )
         await self.repo.add_message(assistant_message)
         await self.db.commit()
@@ -144,11 +144,21 @@ class CompanionService:
 
         return assistant_message
 
+    @staticmethod
+    def _meta_from(collected: Optional[dict]) -> Optional[dict]:
+        """What the tools gathered for this reply, or None when there is nothing to attach (keeps old rows and plain
+        answers NULL). Only trip ids and photo records are ever stored; no free text from the model."""
+        if not collected:
+            return None
+        meta = {k: collected[k] for k in ("trip_ids", "images") if collected.get(k)}
+        return meta or None
+
     # ------------------------------------------------------------------
     # Ports for the graph
     # ------------------------------------------------------------------
     def _build_ports(self, conversation: Conversation, user: User) -> CompanionPorts:
         ctx = ToolExecutionContext(db=self.db, user=user, conversation_id=conversation.id, llm=self.llm)
+        self._collected = ctx.collected   # read by send_message after the graph finishes
 
         async def llm(messages, *, temperature, max_tokens, tools, tier):
             return await self.llm.generate(
