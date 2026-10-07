@@ -66,3 +66,9 @@ def parse_and_validate_phone(raw_number: str, region_hint: Optional[str] = None)
         country_calling_code=country_calling_code,
         region_code=region_code,
     )
+
+
+def calling_code_for_region(region_code: Optional[str]) -> Optional[str]:
+    """International dialling code (no "+") for an ISO region, e.g. "NG" -> "234"; None when unknown."""
+    code = phonenumbers.country_code_for_region((region_code or "").strip().upper())
+    return str(code) if code else None

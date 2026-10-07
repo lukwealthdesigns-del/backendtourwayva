@@ -24,6 +24,8 @@ from app.modules.auth.schemas import (
     GooglePrefill,
     LoginRequest,
     LogoutRequest,
+    PhoneAvailabilityResponse,
+    DetectedRegionResponse,
     RefreshTokenRequest,
     ResendOTPRequest,
     ResetPasswordRequest,
@@ -36,6 +38,10 @@ from app.modules.auth.schemas import (
 )
 from app.modules.auth.service import AuthService
 from app.repositories.user_repository import UserRepository
+from app.core.country_data import get_country
+from app.providers.geolocation.ipinfo_provider import IPinfoProvider
+from app.utils.accept_language import country_hint
+from app.utils.phone import InvalidPhoneNumberError, calling_code_for_region, parse_and_validate_phone
 from app.utils.username import InvalidUsernameError, validate_username
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -261,4 +267,57 @@ async def username_available(
     taken = await UserRepository(db).username_exists(normalized)
     return UsernameAvailabilityResponse(
         username=normalized, available=not taken, reason="This username is already taken." if taken else None
+    )
+
+
+# --- Phone availability (live validation on the signup form) ---
+
+@router.get("/phone-available", response_model=PhoneAvailabilityResponse,
+            dependencies=[Depends(rate_limit(bucket="auth:phone-check", max_requests=30, window_seconds=60))])
+async def phone_available(
+    phone: str = Query(..., min_length=3, max_length=32, description="Phone number in international format, e.g. +2348012345678"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Whether a phone number can still be used to register. Same idea as `/auth/username-available`: the sign-up form
+    calls it (debounced) as soon as the number is valid. The number is validated and normalized first, so every way of
+    typing the same number gives the same answer. Rate limited per IP because, like the username check, it reveals
+    whether a number is registered; the server re-checks on `/auth/signup` regardless."""
+    # An unencoded "+" in a query string arrives as a space; tolerate it so "+234..." always works.
+    raw = ("+" + phone.strip()) if phone[:1] == " " else phone.strip()
+    try:
+        parsed = parse_and_validate_phone(raw)
+    except InvalidPhoneNumberError as exc:
+        return PhoneAvailabilityResponse(phone_number=raw, available=False, reason=str(exc))
+    taken = await UserRepository(db).phone_exists(parsed.e164)
+    return PhoneAvailabilityResponse(
+        phone_number=parsed.e164, available=not taken,
+        reason="An account with this phone number already exists." if taken else None,
+    )
+
+
+# --- Region detection before sign-up (phone-field default) ---
+
+_ipinfo = IPinfoProvider()
+
+
+@router.get("/detect-region", response_model=DetectedRegionResponse,
+            dependencies=[Depends(rate_limit(bucket="auth:detect-region", max_requests=30, window_seconds=60))])
+async def detect_region(
+    client_ip: str | None = Depends(get_client_ip),
+    accept_language: str | None = Header(default=None),
+):
+    """Approximate COUNTRY of the visitor, available before they have an account, so the app can default the
+    sign-up phone field to the right dialling code from the first screen. Signals, in order: the request's IP address
+    (IPinfo), then a region subtag in Accept-Language. Never returns a city, coordinates or the IP itself, and never
+    stores anything. `country: null` means nothing could be detected: the app falls back to the browser locale."""
+    country = await _ipinfo.lookup_country(client_ip)
+    source = "ip"
+    if not country or get_country(country) is None:
+        country, source = country_hint(accept_language), "accept_language"
+    info = get_country(country or "")
+    if info is None:
+        return DetectedRegionResponse(country=None, source="none")
+    return DetectedRegionResponse(
+        country=country.upper(), country_name=info.name,
+        calling_code=calling_code_for_region(country), source=source,
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -192,6 +192,26 @@ class UsernameAvailabilityResponse(BaseModel):
     username: str
     available: bool
     reason: Optional[str] = None
+
+
+class PhoneAvailabilityResponse(BaseModel):
+    """Live "is this phone number already registered?" check for the sign-up form.
+    `phone_number` is the normalized E.164 form (or the raw input when it could not be parsed)."""
+
+    phone_number: str
+    available: bool
+    reason: Optional[str] = None
+
+
+class DetectedRegionResponse(BaseModel):
+    """Approximate country of the caller, available BEFORE sign-up so the phone field can default to it.
+    Country-level only (never a city or coordinates); `source` says which signal won."""
+
+    country: Optional[str] = Field(default=None, description="ISO 3166-1 alpha-2 code, null when nothing could be detected")
+    country_name: Optional[str] = None
+    calling_code: Optional[str] = Field(default=None, description="International dialling code without '+', e.g. '234'")
+    source: Literal["ip", "accept_language", "none"] = "none"
+    approximate: bool = True
 
 
 # --- Google OAuth (Sign in with Google) ---

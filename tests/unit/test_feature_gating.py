@@ -42,7 +42,8 @@ EXPECTED_GATES = {
 PUBLIC_ENDPOINTS = {
     ("auth.py", name) for name in (
         "signup", "verify_email", "resend_otp", "login", "refresh_token", "logout", "forgot_password",
-        "reset_password", "google_sign_in", "google_complete", "username_available",
+        "reset_password", "google_sign_in", "google_complete", "username_available", "phone_available",
+        "detect_region",
     )
 } | {("payments.py", "paystack_webhook")}
 # Provider-backed endpoints that cost real money per call must be rate limited.

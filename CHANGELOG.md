@@ -1,5 +1,19 @@
 # Changelog
 
+## Sign-up: phone availability and country detection
+
+No migrations.
+
+### Added
+- **`GET /auth/phone-available?phone=+234...`** (public, 30/min per IP). Validates and normalizes the number, then says whether
+  an account already uses it (`{phone_number, available, reason}`), exactly like `/auth/username-available`. `/auth/signup`
+  and `/auth/google/complete` still re-check on the server.
+- **`GET /auth/detect-region`** (public, 30/min per IP). Country-level only: IPinfo country of the request IP, then the
+  Accept-Language region subtag, else `country: null`. Returns `{country, country_name, calling_code, source}`; never a city,
+  coordinates or the IP. The app calls it on first load so the sign-up phone field defaults to the visitor's dialling code.
+- `calling_code_for_region()` in `app/utils/phone.py`. Tests: `tests/unit/test_phone_and_region.py`; both routes are listed as
+  intentionally public in `tests/unit/test_feature_gating.py`.
+
 ## Streaming Companion replies
 
 ### Added
