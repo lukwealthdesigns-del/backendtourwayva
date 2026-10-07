@@ -1,5 +1,22 @@
 # Changelog
 
+## Streaming Companion replies
+
+### Added
+- **`POST /companion/conversations/{id}/messages/stream`** (Server-Sent Events). Same turn, rules, rate limit and flags as
+  the normal send route, but the reply arrives as it is written. Events: `status` (`thinking` | `tool`), `delta` (text),
+  `reset` (discard the text shown so far: it was only a preamble to a tool call), `done` (the saved `MessageResponse`,
+  authoritative) and `error` (`error_code`, `message`; internals never leak). A comment keepalive is sent every 15 s; if
+  the client disconnects the turn is cancelled. The turn runs on its own database session (FastAPI closes the request's
+  session before a streamed body is sent). Summary and memory extraction run after the stream ends.
+- **`LLMProvider.generate_stream(on_delta=...)`**: real token streaming in `OpenAIProvider` (`stream_options.include_usage`
+  so token accounting stays exact); the default implementation forwards the finished answer once, so other providers and
+  test doubles keep working. `StreamAccumulator` is a pure, unit-tested fold of the chunks (text, tool calls whose
+  arguments arrive in pieces, usage). One attempt per model: if the primary fails before any text was shown we fall back
+  to the secondary model; once text is on screen we fail with a clear message instead of showing two answers.
+- `CompanionPorts.llm_stream`: the agent loop streams every model call it makes (tool-calling rounds and the final answer).
+  Tests: `tests/unit/test_llm_streaming.py`.
+
 ## Structured chat cards, photos, spoken replies, destination guides, trip editing, minimum budget
 
 One new Alembic migration: `0027_message_meta`. Run `alembic upgrade head`.

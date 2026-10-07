@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,7 +105,8 @@ class CompanionService:
         return await self.repo.list_messages(conversation_id, limit=limit)
 
     async def send_message(
-        self, *, conversation: Conversation, user: User, content: str, defer_post_turn: bool = False
+        self, *, conversation: Conversation, user: User, content: str, defer_post_turn: bool = False,
+        emit: Optional[Callable[[dict], Awaitable[None]]] = None,
     ) -> Message:
         """Runs one turn and returns the saved reply. With `defer_post_turn=True` the (LLM-backed) summarization and
         memory extraction are NOT run here: the caller runs `post_turn()` after responding, so the user is not kept
@@ -120,7 +121,7 @@ class CompanionService:
             {"role": "assistant" if m.role == MessageRole.ASSISTANT else "user", "content": m.content} for m in history
         ]
 
-        ports = self._build_ports(conversation, user)
+        ports = self._build_ports(conversation, user, emit)
         state = await self._runner(
             build_companion_spec(ports),
             {"user_message": content, "history": chat_history, "usage": [], "tools_used": []},
@@ -156,7 +157,9 @@ class CompanionService:
     # ------------------------------------------------------------------
     # Ports for the graph
     # ------------------------------------------------------------------
-    def _build_ports(self, conversation: Conversation, user: User) -> CompanionPorts:
+    def _build_ports(
+        self, conversation: Conversation, user: User, emit: Optional[Callable[[dict], Awaitable[None]]] = None
+    ) -> CompanionPorts:
         ctx = ToolExecutionContext(db=self.db, user=user, conversation_id=conversation.id, llm=self.llm)
         self._collected = ctx.collected   # read by send_message after the graph finishes
 
@@ -165,8 +168,18 @@ class CompanionService:
                 messages, temperature=temperature, max_tokens=max_tokens, tools=tools, tier=tier
             )
 
+        async def llm_stream(messages, *, temperature, max_tokens, tools, tier):
+            async def on_delta(text: Optional[str]) -> None:
+                await emit({"type": "reset"} if text is None else {"type": "delta", "text": text})
+
+            return await self.llm.generate_stream(
+                messages, on_delta=on_delta, temperature=temperature, max_tokens=max_tokens, tools=tools, tier=tier
+            )
+
         async def run_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             logger.info("companion_tool_call", tool=name, user_id=str(user.id))
+            if emit is not None:
+                await emit({"type": "status", "phase": "tool", "tool": name})
             return await execute_tool(name, arguments, ctx)
 
         async def has_feature(flag: FeatureFlag) -> bool:
@@ -191,6 +204,7 @@ class CompanionService:
         return CompanionPorts(
             llm=llm, execute_tool=run_tool, has_feature=has_feature,
             build_system_prompt=build_system_prompt, tool_schemas=TOOL_SCHEMAS,
+            llm_stream=llm_stream if emit is not None else None,
         )
 
     async def _has_feature(self, user: User, flag: FeatureFlag) -> bool:

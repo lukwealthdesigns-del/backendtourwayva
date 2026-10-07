@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import uuid
 
+import asyncio
+import json
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, rate_limit, require_feature
 from app.core.constants import FeatureFlag
+from app.core.exceptions import AppError
 from app.db.models.user import User
 from app.core.logging import get_logger
 from app.db.session import AsyncSessionLocal, get_db
@@ -74,6 +80,95 @@ async def _post_turn(conversation_id: uuid.UUID, user_id: uuid.UUID, content: st
                 await service.post_turn(conversation=conversation, user=user, content=content, reply=reply)
     except Exception as exc:  # noqa: BLE001 - the reply is already delivered
         logger.warning("companion_post_turn_failed", error=str(exc))
+
+
+def _sse(event: str, data: dict) -> str:
+    """One Server-Sent Events frame."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+_KEEPALIVE_SECONDS = 15
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/stream",
+    dependencies=[
+        Depends(require_feature(FeatureFlag.COMPANION)),
+        Depends(rate_limit(bucket="companion:message", max_requests=20, window_seconds=60, per="user")),
+    ],
+    responses={200: {"content": {"text/event-stream": {}}, "description": "Server-Sent Events: status, delta, reset, done, error."}},
+)
+async def stream_message(
+    conversation_id: uuid.UUID,
+    payload: MessageCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Same turn as `POST .../messages`, but the reply arrives as it is written (Server-Sent Events).
+
+    Events (`event:` name -> JSON `data:`):
+      * `status`  {phase: "thinking" | "tool", tool?}  - progress while the assistant works
+      * `delta`   {text}                                - a piece of the reply, in order
+      * `reset`   {}                                    - discard the text shown so far (it was only a preamble to a tool call)
+      * `done`    {message: MessageResponse}            - the saved reply (authoritative; replace the streamed text with it)
+      * `error`   {error_code, message}                 - the turn failed; nothing was saved for the reply
+    The request's own database session is closed before the body is streamed, so the turn runs on a fresh session.
+    If the client disconnects the turn is cancelled."""
+    holder: dict = {}
+    user_id = current_user.id
+
+    async def events():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def emit(event: dict) -> None:
+            await queue.put(event)
+
+        async def work() -> None:
+            try:
+                async with AsyncSessionLocal() as session:
+                    from app.repositories.user_repository import UserRepository
+
+                    service = CompanionService(session)
+                    user = await UserRepository(session).get_by_id(user_id)
+                    conversation = await service.get_owned_conversation(conversation_id=conversation_id, user_id=user_id)
+                    reply = await service.send_message(
+                        conversation=conversation, user=user, content=payload.content, defer_post_turn=True, emit=emit
+                    )
+                    holder["reply"] = reply.content
+                    await queue.put({"type": "done", "message": MessageResponse.model_validate(reply).model_dump(mode="json")})
+            except AppError as exc:
+                await queue.put({"type": "error", "error_code": exc.error_code, "message": exc.message})
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - never leak internals into the stream
+                logger.exception("companion_stream_failed")
+                await queue.put({"type": "error", "error_code": "internal_error", "message": "Something went wrong. Please try again."})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(work())
+        yield _sse("status", {"phase": "thinking"})
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"            # keeps proxies from closing a quiet connection during a slow tool
+                    continue
+                if item is None:
+                    break
+                yield _sse(item.pop("type"), item)
+        finally:
+            if not task.done():
+                task.cancel()                          # the client went away: stop spending on this turn
+
+    async def after_stream() -> None:
+        if "reply" in holder:
+            await _post_turn(conversation_id, user_id, payload.content, holder["reply"])
+
+    return StreamingResponse(
+        events(), media_type="text/event-stream", background=BackgroundTask(after_stream),
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @router.post(

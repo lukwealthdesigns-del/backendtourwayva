@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 
 # Chat messages are passed through to the provider close to verbatim
@@ -67,3 +67,26 @@ class LLMProvider(ABC):
         both models fail (section 79).
         """
         raise NotImplementedError
+
+    async def generate_stream(
+        self,
+        messages: list[ChatMessage],
+        *,
+        on_delta: Callable[[Optional[str]], Awaitable[None]],
+        temperature: float = 0.7,
+        max_tokens: int = 800,
+        tools: Optional[list[dict]] = None,
+        tier: str = "default",
+        timeout: Optional[float] = None,
+    ) -> LLMResponse:
+        """Like `generate`, but forwards the answer's text to `on_delta(text)` as it is produced. `on_delta(None)` means
+        "discard what you showed so far": the model started with some text and then decided to call a tool, so that text
+        was only a preamble. Returns the complete LLMResponse exactly as `generate` would. The default implementation
+        does not stream: it generates normally and forwards the finished text once, so providers that cannot stream
+        (and test doubles) keep working."""
+        response = await self.generate(
+            messages, temperature=temperature, max_tokens=max_tokens, tools=tools, tier=tier, timeout=timeout
+        )
+        if response.content and not response.tool_calls:
+            await on_delta(response.content)
+        return response

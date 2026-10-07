@@ -59,6 +59,8 @@ class CompanionPorts:
     has_feature: Callable[[FeatureFlag], Awaitable[bool]]
     build_system_prompt: Callable[[Intent], Awaitable[str]]
     tool_schemas: list[dict[str, Any]]
+    # Same signature as `llm`, but forwards the answer text as it is produced (set only when the caller wants a stream).
+    llm_stream: Optional[Callable[..., Awaitable[Any]]] = None
 
 
 class CompanionState(TypedDict, total=False):
@@ -136,7 +138,7 @@ def make_nodes(ports: CompanionPorts) -> dict[str, Callable[[dict[str, Any]], Aw
         used: list[str] = []
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            response = await ports.llm(messages, temperature=0.7, max_tokens=800, tools=schemas, tier="default")
+            response = await (ports.llm_stream or ports.llm)(messages, temperature=0.7, max_tokens=800, tools=schemas, tier="default")
             usage.append(_usage_entry(response, "reply"))
             if not response.tool_calls:
                 return {"reply": response.content, "model_used": response.model_used, "usage": usage, "tools_used": used}
@@ -158,7 +160,7 @@ def make_nodes(ports: CompanionPorts) -> dict[str, Callable[[dict[str, Any]], Aw
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result, default=str)})
 
         # Out of iterations: force a final answer with no tools so the loop cannot run forever.
-        final = await ports.llm(messages, temperature=0.7, max_tokens=800, tools=None, tier="default")
+        final = await (ports.llm_stream or ports.llm)(messages, temperature=0.7, max_tokens=800, tools=None, tier="default")
         usage.append(_usage_entry(final, "reply"))
         return {"reply": final.content, "model_used": final.model_used, "usage": usage, "tools_used": used}
 
