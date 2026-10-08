@@ -25,6 +25,7 @@ import redis.asyncio as aioredis
 from app.core.config import settings
 from app.core.exceptions import RateLimitedError
 from app.core.logging import get_logger
+from app.services.cache_service import _note_redis_failure, _redis_paused  # dev only: skip a Redis that is known to be down
 
 logger = get_logger(__name__)
 
@@ -52,13 +53,15 @@ async def check_rate_limit(*, key: str, max_requests: int, window_seconds: int) 
     window_id = int(time.time()) // window_seconds
     redis_key = f"ratelimit:{key}:{window_id}"
 
+    if _redis_paused():
+        return RateLimitResult(allowed=True, remaining=max_requests, retry_after_seconds=0)
     try:
         client = _get_client()
         count = await client.incr(redis_key)
         if count == 1:
             await client.expire(redis_key, window_seconds)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("rate_limit_check_failed_open", key=key, error=str(exc))
+        _note_redis_failure("rate_limit_check_failed_open", key, exc)
         return RateLimitResult(allowed=True, remaining=max_requests, retry_after_seconds=0)
 
     if count > max_requests:
@@ -90,6 +93,8 @@ def _failed_login_key(email: str) -> str:
 
 
 async def record_failed_login(email: str) -> None:
+    if _redis_paused():
+        return
     try:
         client = _get_client()
         key = _failed_login_key(email)
@@ -101,6 +106,8 @@ async def record_failed_login(email: str) -> None:
 
 
 async def clear_failed_logins(email: str) -> None:
+    if _redis_paused():
+        return
     try:
         client = _get_client()
         await client.delete(_failed_login_key(email))
@@ -109,6 +116,8 @@ async def clear_failed_logins(email: str) -> None:
 
 
 async def is_login_locked_out(email: str) -> bool:
+    if _redis_paused():
+        return False
     try:
         client = _get_client()
         raw = await client.get(_failed_login_key(email))

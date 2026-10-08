@@ -1,5 +1,13 @@
 # Changelog
 
+## Development: planning works without Redis
+
+- `CacheService` falls back to a small in-process store when Redis is unreachable and `ENVIRONMENT=development`, and stops
+  retrying a dead Redis for 30 s (`app/services/cache_service.py`; the rate limiter honors the same pause). Before this, a
+  generation job was never stored, the next read returned 404 "Generation job not found" and trip generation failed at ~2%.
+  Production, staging and tests are unchanged: a missing Redis is still a logged cache miss there, and background planning
+  still needs a real Redis. Test: `tests/unit/test_cache_local_fallback.py`.
+
 ## Sign-up: phone availability and country detection
 
 No migrations.

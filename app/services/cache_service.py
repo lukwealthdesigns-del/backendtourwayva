@@ -18,6 +18,7 @@ trail of historical lookups.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Optional
 
 import redis.asyncio as aioredis
@@ -35,6 +36,59 @@ def _get_client() -> aioredis.Redis:
     if _redis_client is None:
         _redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
     return _redis_client
+
+
+# --- Development fallback when Redis is not running -------------------------------------------------------------
+# Generation jobs, locks and idempotency claims live ONLY in the cache (see planning/jobs.py). Without Redis a job is
+# never stored, so the very next read says "Generation job not found" and trip generation fails at ~2%. In local
+# development (ENVIRONMENT=development) we therefore fall back to a small in-process store, and stop retrying a dead
+# Redis for a while instead of paying a slow failed connection on every single cache call. Production, staging and
+# tests never use it: there a missing Redis stays a visible, logged cache miss.
+_REDIS_RETRY_AFTER_SECONDS = 30.0
+_redis_down_until: float = 0.0
+_last_fallback_log: float = 0.0
+_local_store: dict[str, tuple[str, float]] = {}      # key -> (value, expires_at as monotonic seconds)
+
+
+def _fallback_enabled() -> bool:
+    return settings.ENVIRONMENT == "development"
+
+
+def _redis_paused() -> bool:
+    return _fallback_enabled() and time.monotonic() < _redis_down_until
+
+
+def _note_redis_failure(op: str, key: str, exc: Exception) -> None:
+    """Log a failed Redis call. In development: pause Redis for a while and say so once (not once per call)."""
+    global _redis_down_until, _last_fallback_log
+    if not _fallback_enabled():
+        logger.warning(op, key=key, error=str(exc))
+        return
+    now = time.monotonic()
+    _redis_down_until = now + _REDIS_RETRY_AFTER_SECONDS
+    if now - _last_fallback_log > 60:
+        _last_fallback_log = now
+        logger.warning("redis_unavailable_using_local_memory", error=str(exc), retry_in_seconds=int(_REDIS_RETRY_AFTER_SECONDS),
+                       hint="Start Redis (REDIS_URL) for caching shared across processes. Trip generation works without it in development.")
+
+
+def _local_get(key: str) -> Optional[str]:
+    item = _local_store.get(key)
+    if item is None:
+        return None
+    value, expires_at = item
+    if expires_at <= time.monotonic():
+        _local_store.pop(key, None)
+        return None
+    return value
+
+
+def _local_set(key: str, value: str, ttl_seconds: int) -> None:
+    if len(_local_store) > 5000:                      # keep the dev fallback bounded
+        now = time.monotonic()
+        for k in [k for k, (_, exp) in _local_store.items() if exp <= now]:
+            _local_store.pop(k, None)
+    _local_store[key] = (value, time.monotonic() + max(1, int(ttl_seconds)))
 
 
 class CacheService:
@@ -55,23 +109,32 @@ class CacheService:
 
     @staticmethod
     async def get_json(key: str) -> Optional[Any]:
+        if _redis_paused():
+            raw = _local_get(key)
+            return json.loads(raw) if raw is not None else None
         try:
             client = _get_client()
             raw = await client.get(key)
             value = json.loads(raw) if raw is not None else None
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache_get_failed", key=key, error=str(exc))
-            return None
+            _note_redis_failure("cache_get_failed", key, exc)
+            raw = _local_get(key) if _fallback_enabled() else None
+            return json.loads(raw) if raw is not None else None
         await CacheService._record_outcome(key, hit=value is not None)
         return value
 
     @staticmethod
     async def set_json(key: str, value: Any, ttl_seconds: int) -> None:
+        if _redis_paused():
+            _local_set(key, json.dumps(value), ttl_seconds)
+            return
         try:
             client = _get_client()
             await client.set(key, json.dumps(value), ex=ttl_seconds)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache_set_failed", key=key, error=str(exc))
+            _note_redis_failure("cache_set_failed", key, exc)
+            if _fallback_enabled():
+                _local_set(key, json.dumps(value), ttl_seconds)
 
     @staticmethod
     async def set_if_absent(key: str, value: str, ttl_seconds: int) -> Optional[bool]:
@@ -79,37 +142,55 @@ class CacheService:
         Returns True if this caller set the key, False if it already existed,
         and None if Redis could not be reached (callers decide whether to
         proceed without the guard)."""
+        def _local_nx() -> bool:
+            if _local_get(key) is not None:
+                return False
+            _local_set(key, value, ttl_seconds)
+            return True
+
+        if _redis_paused():
+            return _local_nx()
         try:
             client = _get_client()
             return bool(await client.set(key, value, ex=ttl_seconds, nx=True))
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache_set_if_absent_failed", key=key, error=str(exc))
-            return None
+            _note_redis_failure("cache_set_if_absent_failed", key, exc)
+            return _local_nx() if _fallback_enabled() else None
 
     @staticmethod
     async def get_raw(key: str) -> Optional[str]:
+        if _redis_paused():
+            return _local_get(key)
         try:
             value = await _get_client().get(key)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache_get_raw_failed", key=key, error=str(exc))
-            return None
+            _note_redis_failure("cache_get_raw_failed", key, exc)
+            return _local_get(key) if _fallback_enabled() else None
         await CacheService._record_outcome(key, hit=value is not None)
         return value
 
     @staticmethod
     async def set_raw(key: str, value: str, ttl_seconds: int) -> None:
+        if _redis_paused():
+            _local_set(key, value, ttl_seconds)
+            return
         try:
             await _get_client().set(key, value, ex=ttl_seconds)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache_set_raw_failed", key=key, error=str(exc))
+            _note_redis_failure("cache_set_raw_failed", key, exc)
+            if _fallback_enabled():
+                _local_set(key, value, ttl_seconds)
 
     @staticmethod
     async def delete(key: str) -> None:
+        _local_store.pop(key, None)
+        if _redis_paused():
+            return
         try:
             client = _get_client()
             await client.delete(key)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("cache_delete_failed", key=key, error=str(exc))
+            _note_redis_failure("cache_delete_failed", key, exc)
 
     @staticmethod
     async def list_keys(pattern: str) -> list[str]:
@@ -130,7 +211,7 @@ class CacheService:
         # cache — only PROVIDER lookup categories count toward hit-rate
         # reporting (see cache-key builders below).
         category = key.split(":", 1)[0]
-        if category in _NON_PROVIDER_CACHE_CATEGORIES:
+        if category in _NON_PROVIDER_CACHE_CATEGORIES or _redis_paused():
             return
         try:
             client = _get_client()
