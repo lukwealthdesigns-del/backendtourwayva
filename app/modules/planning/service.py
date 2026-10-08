@@ -221,6 +221,7 @@ class PlanningService:
             return await self._finish(job, cancelled=True)
         except AppError as exc:
             await self.db.rollback()
+            logger.warning("planning_job_app_error", job_id=str(job.get("job_id")), code=exc.error_code, message=exc.message)
             return await self._finish(job, error={"code": exc.error_code, "message": exc.message, "retryable": False})
         except Exception:  # noqa: BLE001
             await self.db.rollback()
@@ -318,6 +319,9 @@ class PlanningService:
         cancelled: bool = False,
     ) -> dict[str, Any]:
         job["status"] = "cancelled" if cancelled else ("succeeded" if error is None else "failed")
+        if error is not None:   # failures used to be visible only to the client: say why in the server log too
+            logger.warning("planning_job_failed", job_id=str(job.get("job_id")), trip_id=str(job.get("trip_id")),
+                           code=error.get("code"), message=error.get("message"))
         if error is None and not cancelled:
             job["progress"] = {"stage": "done", "stage_index": len(STAGES), "stage_count": len(STAGES), "percent": 100}
         job["result"], job["error"] = result, error

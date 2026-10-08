@@ -152,9 +152,11 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
             return _fail("trip_too_long", "Itinerary generation supports trips of up to 14 days.")
         try:
             geo = await ports.geocode(spec.destination)
-        except ProviderUnavailableError:
+        except ProviderUnavailableError as exc:
+            logger.warning("planning_geocode_unavailable destination=%r: %s", spec.destination, exc)
             return _fail("geocoding_unavailable", "Location lookup is temporarily unavailable.", retryable=True)
-        except Exception:  # noqa: BLE001 - not found / provider error: cannot plan without a verified place
+        except Exception as exc:  # noqa: BLE001 - not found / provider error: cannot plan without a verified place
+            logger.warning("planning_geocode_failed destination=%r: %s: %s", spec.destination, type(exc).__name__, exc, exc_info=True)
             return _fail("destination_not_found", f"Could not find '{spec.destination}'. Check the spelling.")
         return {"geo": geo}
 
@@ -294,7 +296,8 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
         for temperature in temperatures:
             try:
                 raw = await ports.llm(messages, temperature, 4000)
-            except ProviderUnavailableError:
+            except ProviderUnavailableError as exc:
+                logger.warning("planning_llm_unavailable: %s", exc)
                 return _fail("ai_unavailable", "The AI planner is temporarily unavailable. Please try again.", retryable=True)
             try:
                 return {"plan": parse_llm_plan(raw, spec, currency), "notes": list(notes)}
