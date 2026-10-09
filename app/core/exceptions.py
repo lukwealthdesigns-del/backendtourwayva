@@ -48,6 +48,21 @@ class ForbiddenError(AppError):
     error_code = "forbidden"
 
 
+class PlanLimitError(AppError):
+    """The request is valid but beyond what the user's plan allows right now (e.g. a trip longer than their plan plans).
+    `details` carries the limits so the app can explain them."""
+
+    status_code = 403
+    error_code = "plan_limit"
+
+
+class GenerationQuotaError(AppError):
+    """The user used all itinerary generations their plan includes this month."""
+
+    status_code = 403
+    error_code = "generation_quota"
+
+
 class PaymentRequiredError(AppError):
     """The requested action needs a completed payment (e.g. a paid plan)."""
 

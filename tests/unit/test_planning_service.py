@@ -81,6 +81,11 @@ def _service(execute=None, trips=None):
     service.trips = trips or _FakeTrips()
     service.executed = []
 
+    async def no_plan_check(trip, user_id, from_day):       # the plan limits have their own tests (test_long_trip_planning.py)
+        return None
+
+    service._enforce_plan = no_plan_check
+
     async def default_execute(job):
         service.executed.append(job["job_id"])
         return {"result": {"version_number": 1}}
@@ -422,7 +427,16 @@ class _ExecuteEnv:
         env = self
         self.user = NS(id=uuid.uuid4(), currency="EUR", language="fr")
         self.trip = NS(id=uuid.uuid4(), destination="Paris", origin=None, start_date=date(2026, 10, 1),
-                       end_date=date(2026, 10, 3), travelers=2, budget_amount=1000.0, budget_currency=None)
+                       end_date=date(2026, 10, 3), travelers=2, budget_amount=1000.0, budget_currency=None,
+                       planning_outline=None)
+
+        class _Policy:                                       # the admin's planning limits: the defaults, no database
+            def __init__(self, db):
+                pass
+
+            async def limits_for(self, user_id):
+                from app.modules.planning.policy_rules import PolicyConfig, effective_limits
+                return effective_limits(PolicyConfig(), is_premium=False)
 
         class _Entitlements:
             def __init__(self, db):
@@ -457,6 +471,7 @@ class _ExecuteEnv:
                 return [NS(content="likes museums", expires_at=None)]
 
         monkeypatch.setattr(planning_module, "EntitlementService", _Entitlements)
+        monkeypatch.setattr(planning_module, "PlanningPolicyService", _Policy)
         monkeypatch.setattr(planning_module, "UserRepository", _Users)
         monkeypatch.setattr(planning_module, "PreferencesRepository", _Prefs)
         monkeypatch.setattr(planning_module, "MemoryRepository", _Memory)

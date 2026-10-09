@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.constants import TripMemberRole, TripStatus
+from app.modules.planning.policy_rules import HARD_MAX_DAYS
 
 
 class TripCreateRequest(BaseModel):
@@ -26,8 +27,9 @@ class TripCreateRequest(BaseModel):
             raise ValueError("end_date cannot be before start_date.")
         # A generous but real ceiling — prevents accidental
         # multi-year date ranges from scaffolding thousands of days.
-        if (self.end_date - self.start_date).days > 90:
-            raise ValueError("Trips longer than 90 days are not supported yet.")
+        # The longest trip any plan can have (admin-set limits are lower or equal); see modules/planning/policy_rules.py.
+        if (self.end_date - self.start_date).days + 1 > HARD_MAX_DAYS:
+            raise ValueError(f"Trips longer than {HARD_MAX_DAYS} days are not supported.")
         return self
 
 
@@ -94,8 +96,19 @@ class TripResponse(BaseModel):
     archived_at: Optional[datetime] = None
     generation: Optional[TripGenerationInfo] = None  # present while generating, or after a failure
     updated_at: Optional[datetime] = None            # last change (for "last updated" on trip cards)
+    # Long trips only: the route (segments) and which detailed parts exist (`chunks_planned` = first day of each).
+    # Internal bookkeeping (summaries, titles used) is not part of the API.
+    planning_outline: Optional[dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("planning_outline", mode="after")
+    @classmethod
+    def _public_outline(cls, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if not value:
+            return None
+        keys = ("version", "total_days", "start_date", "destination", "overview", "segments", "chunks_planned", "chunk_days", "generated_by")
+        return {k: value[k] for k in keys if k in value}
 
 
 # Single source of truth for the member shape (now includes the member's public profile).

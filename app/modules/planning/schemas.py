@@ -74,6 +74,11 @@ class GenerateItineraryRequest(BaseModel):
     include_hotels: bool = True
     include_activities: bool = True
     preferences: Optional[TripPreferencesPayload] = None
+    from_day: Optional[int] = Field(
+        default=None, ge=1, le=366,
+        description="Long trips only: first day of the part to plan in detail (1, 8, 15 ... with 7-day parts). "
+                    "Omit to plan the first part that has no detailed plan yet.",
+    )
 
 
 class JobError(BaseModel):

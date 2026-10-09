@@ -21,14 +21,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.constants import FeatureFlag
-from app.core.exceptions import AppError, NotFoundError, ProviderUnavailableError
+from app.core.exceptions import (
+    AppError, GenerationQuotaError, NotFoundError, PlanLimitError, ProviderUnavailableError, ValidationAppError,
+)
 from app.core.logging import get_logger
 from app.db.models.trip import Trip, TripPreferences
 from app.db.models.user import User
 from app.modules.entitlements.service import EntitlementService
+from app.modules.planning import chunking, outline as outline_mod
 from app.modules.planning.domain import TripSpec
 from app.modules.planning.graph import PlanningState, build_generation_spec
 from app.modules.planning.jobs import NODE_STAGE, STAGES, JobStore, progress_for, public_job
+from app.modules.planning.policy import GENERATION_EVENT, PlanningPolicyService
 from app.modules.planning.schemas import GenerateItineraryRequest, TripPreferencesPayload
 from app.modules.planning.workflow import WorkflowSpec, run_workflow
 from app.modules.trips.service import TripService
@@ -134,7 +138,8 @@ class PlanningService:
         request: GenerateItineraryRequest,
         idempotency_key: Optional[str],
     ) -> dict[str, Any]:
-        await self.trips.get_trip_authorized(trip_id=trip_id, user_id=user.id, require_editor=True)
+        trip = await self.trips.get_trip_authorized(trip_id=trip_id, user_id=user.id, require_editor=True)
+        await self._enforce_plan(trip, user.id, request.from_day)
 
         job_id = uuid.uuid4()
         if idempotency_key:
@@ -214,6 +219,7 @@ class PlanningService:
             state = await self._execute(job)
             if state.get("error"):
                 return await self._finish(job, error=state["error"])
+            await self._after_success(job, state["result"])
             return await self._finish(job, result=state["result"])
         except GenerationCancelled:
             await self.db.rollback()
@@ -259,19 +265,13 @@ class PlanningService:
             if m.expires_at is None or m.expires_at > datetime.now(timezone.utc)
         ][:10] if may_use_memory else []
 
-        if self._ports_factory is not None:
-            ports = self._ports_factory(self.db, user_id=user_id, trip_id=trip_id, premium_ai=premium_ai)
-        else:
-            from app.modules.planning.deps import build_ports
-
-            ports = build_ports(self.db, user_id=user_id, trip_id=trip_id, premium_ai=premium_ai)
-
-        initial: dict[str, Any] = {
-            "spec": self._spec_from_trip(trip),
-            "currency": (trip.budget_currency or user.currency or "USD").upper(),
-            "language": user.language or "en",
-            "preferences": preferences,
-            "memories": memories,
+        full_spec = self._spec_from_trip(trip)
+        policy = PlanningPolicyService(self.db)
+        limits = await policy.limits_for(user_id)
+        currency = (trip.budget_currency or user.currency or "USD").upper()
+        language = user.language or "en"
+        base_initial: dict[str, Any] = {
+            "currency": currency, "language": language, "preferences": preferences, "memories": memories,
             "options": {
                 "city_code": request.get("city_code"),
                 "include_hotels": request.get("include_hotels", True),
@@ -279,9 +279,157 @@ class PlanningService:
             },
             "repair_attempts": 0, "repairs": [], "notes": [], "issues": [],
         }
+
+        if full_spec.num_days > limits.full_detail_max_days:
+            return await self._execute_long_trip(
+                job, trip=trip, user=user, limits=limits, full_spec=full_spec, base_initial=base_initial, premium_ai=premium_ai,
+            )
+
+        # Ordinary trip: one detailed plan for the whole stay. A route outline left over from when the trip was longer is dropped.
+        extra: dict[str, Any] = {}
+        if trip.planning_outline is not None:
+            extra["after_save"] = lambda trip_row, _plan: setattr(trip_row, "planning_outline", None)
+        ports = self._make_ports(user_id, trip_id, premium_ai, **extra)
         spec = build_generation_spec(ports)
         spec.nodes = {name: self._reporting(job, name, fn) for name, fn in spec.nodes.items()}
-        return await self._runner(spec, initial)
+        return await self._runner(spec, {**base_initial, "spec": full_spec})
+
+    # ------------------------------------------------------------------
+    # Long trips: plan limits, route outline, one detailed part at a time
+    # ------------------------------------------------------------------
+    def _make_ports(self, user_id: uuid.UUID, trip_id: uuid.UUID, premium_ai: bool, **extra: Any):
+        if self._ports_factory is not None:
+            return self._ports_factory(self.db, user_id=user_id, trip_id=trip_id, premium_ai=premium_ai, **extra)
+        from app.modules.planning.deps import build_ports
+
+        return build_ports(self.db, user_id=user_id, trip_id=trip_id, premium_ai=premium_ai, **extra)
+
+    async def _enforce_plan(self, trip: Trip, user_id: uuid.UUID, from_day: Optional[int]) -> None:
+        """Before anything is queued or spent: is this trip within the user's plan, and do they have generations left?
+        Raises errors whose message is safe to show; `details` carries the limits for the app."""
+        policy = PlanningPolicyService(self.db)
+        limits = await policy.limits_for(user_id)
+        total = (trip.end_date - trip.start_date).days + 1
+        details = {"max_days": limits.max_days, "tier": limits.tier, "trip_days": total}
+        if total > limits.max_days:
+            raise PlanLimitError(f"Your plan plans trips of up to {limits.max_days} days. This trip is {total} days long.", details)
+        used = await policy.generations_this_month(user_id)
+        if limits.monthly_limit > 0 and used >= limits.monthly_limit:
+            raise GenerationQuotaError(
+                f"You have used all {limits.monthly_limit} itinerary generations included this month.",
+                {**details, "monthly_limit": limits.monthly_limit, "used_this_month": used},
+            )
+        if total <= limits.full_detail_max_days:
+            if from_day is not None:
+                raise ValidationAppError("This trip is planned in one go; there are no separate parts to choose.", details)
+            return
+        planned = (trip.planning_outline or {}).get("chunks_planned") or []
+        current = outline_mod.outline_is_current(trip.planning_outline, self._spec_from_trip(trip))
+        chunk_days = (trip.planning_outline or {}).get("chunk_days") or limits.chunk_days if current else limits.chunk_days
+        try:
+            chunking.resolve_chunk(total, chunk_days, from_day, planned if current else [])
+        except chunking.ChunkError as exc:
+            raise ValidationAppError(str(exc), details) from exc
+
+    async def _ensure_outline(
+        self, trip: Trip, *, spec: TripSpec, user: User, limits: Any, base_initial: dict[str, Any], premium_ai: bool,
+    ) -> dict[str, Any]:
+        """The whole-trip route. Reuse the stored one while the trip's dates and destination still match; otherwise take a
+        cached route for a similar trip, otherwise ask the cheaper model once; if that fails, a single-stay route."""
+        if outline_mod.outline_is_current(trip.planning_outline, spec):
+            return trip.planning_outline
+        from app.services.cache_service import CacheService
+
+        preferences, language = base_initial["preferences"], base_initial["language"]
+        cache_key = outline_mod.outline_cache_key(spec, preferences, language)
+        outline: Optional[dict[str, Any]] = None
+        cached = await CacheService.get_json(cache_key)
+        if cached:
+            outline = outline_mod.from_cache_value(cached, spec)
+        if outline is None:
+            ports = self._make_ports(user.id, trip.id, premium_ai)
+            ask = ports.llm_fast or ports.llm
+            try:
+                raw = await ask(
+                    outline_mod.build_outline_messages(
+                        spec=spec, currency=base_initial["currency"], preferences=preferences,
+                        memories=base_initial["memories"], language=language,
+                    ),
+                    0.3, outline_mod.OUTLINE_MAX_TOKENS,
+                )
+                outline = outline_mod.parse_outline(raw, spec)
+                await CacheService.set_json(cache_key, outline_mod.to_cache_value(outline), outline_mod.OUTLINE_CACHE_TTL_SECONDS)
+            except (ProviderUnavailableError, outline_mod.OutlineParseError, ValueError) as exc:
+                logger.warning("planning_outline_fallback", trip_id=str(trip.id), error=str(exc))
+                outline = outline_mod.fallback_outline(spec)
+        # The part size is fixed when the route is made, so parts planned earlier stay aligned if an admin changes it later.
+        outline = {**outline, "chunk_days": limits.chunk_days}
+        # Keep the route even if the detailed part fails afterwards: the user never pays for it twice.
+        trip.planning_outline = outline
+        if not trip.overview and outline.get("overview"):
+            trip.overview = outline["overview"]
+        await self.trip_repo.save_trip(trip)
+        await self.db.commit()
+        return outline
+
+    async def _execute_long_trip(
+        self, job: dict[str, Any], *, trip: Trip, user: User, limits: Any, full_spec: TripSpec,
+        base_initial: dict[str, Any], premium_ai: bool,
+    ) -> dict[str, Any]:
+        outline = await self._ensure_outline(
+            trip, spec=full_spec, user=user, limits=limits, base_initial=base_initial, premium_ai=premium_ai,
+        )
+        chunk_days = outline.get("chunk_days") or limits.chunk_days
+        start_day, end_day = chunking.resolve_chunk(
+            full_spec.num_days, chunk_days, (job.get("request") or {}).get("from_day"), outline.get("chunks_planned") or [],
+        )
+        part_spec = chunking.chunk_spec(full_spec, outline, start_day, end_day)
+        if part_spec.destination != full_spec.destination:      # the client's city code belongs to the main destination only
+            base_initial = {**base_initial, "options": {**base_initial["options"], "city_code": None}}
+        context = chunking.build_trip_context(outline, start_day=start_day, end_day=end_day, total_days=full_spec.num_days)
+
+        def remember(trip_row: Trip, plan: Any) -> None:
+            trip_row.planning_outline = chunking.record_chunk(outline, plan, start_day=start_day, day_offset=start_day - 1)
+
+        # Cost control: only the first detailed part uses the strong model; later parts use the default one.
+        ports = self._make_ports(
+            user.id, trip.id, premium_ai, tier="strong" if (premium_ai and start_day == 1) else "default",
+            day_offset=start_day - 1, partial=True, after_save=remember,
+        )
+        spec = build_generation_spec(ports)
+        spec.nodes = {name: self._reporting(job, name, fn) for name, fn in spec.nodes.items()}
+        state = await self._runner(spec, {
+            **base_initial, "spec": part_spec, "trip_context": context,
+            "change_summary": f"AI-generated itinerary for days {start_day}-{end_day}.",
+        })
+        if state.get("result") and not state.get("error"):
+            planned = sorted(set(outline.get("chunks_planned") or []) | {start_day})
+            state["result"]["chunk"] = {
+                "start_day": start_day, "end_day": end_day, "total_days": full_spec.num_days, "chunk_days": chunk_days,
+                "chunks_planned": planned,
+            }
+        return state
+
+    async def _after_success(self, job: dict[str, Any], result: dict[str, Any]) -> None:
+        """Count the generation against the monthly allowance and raise a cost alert if this trip's AI spend is high.
+        Best effort: bookkeeping must never fail a generation that already succeeded."""
+        try:
+            from app.modules.analytics.service import AnalyticsService
+
+            user_id, trip_id = uuid.UUID(job["user_id"]), uuid.UUID(job["trip_id"])
+            await AnalyticsService(self.db).record_event(
+                user_id=user_id, event_type=GENERATION_EVENT,
+                properties={"trip_id": str(trip_id), "chunk": result.get("chunk"), "days": result.get("days")},
+            )
+            policy = PlanningPolicyService(self.db)
+            cost = await policy.trip_ai_cost_usd(trip_id)
+            result["ai_cost_usd"] = round(cost, 4)
+            threshold = (await policy.get_config()).cost_alert_usd
+            if threshold > 0 and cost > threshold:
+                logger.warning("planning_cost_alert", trip_id=str(trip_id), cost_usd=round(cost, 4), threshold_usd=threshold)
+        except Exception as exc:  # noqa: BLE001
+            await self.db.rollback()
+            logger.warning("planning_after_success_failed", error=str(exc))
 
     @staticmethod
     def _reporting(job: dict[str, Any], node: str, fn: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]):

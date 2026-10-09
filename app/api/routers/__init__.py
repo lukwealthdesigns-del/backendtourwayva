@@ -19,6 +19,7 @@ from app.api.routers.maps import router as maps_router
 from app.api.routers.memory import router as memory_router
 from app.api.routers.notifications import router as notifications_router
 from app.api.routers.payments import router as payments_router
+from app.api.routers.planning import limits_router as planning_limits_router
 from app.api.routers.planning import router as planning_router
 from app.api.routers.places import router as places_router
 from app.api.routers.saved_places import router as saved_places_router
@@ -69,6 +70,7 @@ api_v1_router.include_router(collaboration_router)
 api_v1_router.include_router(subscriptions_router)
 api_v1_router.include_router(payments_router)
 api_v1_router.include_router(planning_router)
+api_v1_router.include_router(planning_limits_router)
 api_v1_router.include_router(trials_router)
 api_v1_router.include_router(entitlements_router)
 

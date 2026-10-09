@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import TripMemberRole, TripStatus
 from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationAppError
 from app.db.models.trip import Trip, TripDay, TripMember
+from app.modules.planning.policy_rules import HARD_MAX_DAYS
 from app.modules.trips.schemas import TripCreateRequest, TripUpdateRequest
 from app.repositories.trip_repository import TripRepository
 
@@ -87,8 +88,8 @@ class TripService:
         dates_changed = (new_start, new_end) != (trip.start_date, trip.end_date)
         if new_end < new_start:
             raise ValidationAppError("end_date cannot be before start_date.")
-        if (new_end - new_start).days > 90:
-            raise ValidationAppError("Trips longer than 90 days are not supported yet.")
+        if (new_end - new_start).days + 1 > HARD_MAX_DAYS:
+            raise ValidationAppError(f"Trips longer than {HARD_MAX_DAYS} days are not supported.")
 
         if structural and (dates_changed or changes.get("destination", trip.destination) != trip.destination):
             if await JobStore.trip_locked(trip.id):

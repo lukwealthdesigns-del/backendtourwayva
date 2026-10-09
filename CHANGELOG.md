@@ -1,5 +1,23 @@
 # Changelog
 
+## Long trips: layered planning, plan limits, growth mode
+
+Migration `0028_planning_policy_and_outline` (table `planning_policy`, column `trips.planning_outline`).
+
+- **Layered planning for trips longer than `full_detail_max_days` (14):** one cheap route outline (fast model tier, cached and
+  shared between similar trips, falls back to a single stay if the model fails), then detailed itineraries `chunk_days` (7)
+  days at a time, built on demand: `POST /trips/{id}/generate` takes an optional `from_day`. Each part is planned by the normal
+  workflow over a small sub-trip (its own dates, area and share of the budget) plus a short context (no re-sending the whole
+  trip): `planning/outline.py`, `planning/chunking.py`. Only the first part uses the strong model tier. Cost per part is flat,
+  however long the trip is.
+- **Plan limits:** `GET /planning/limits` (what this user can do), `GET|PUT /admin/planning-policy` (`plans:manage`, audited).
+  Growth mode ON gives everyone the growth limits; OFF applies premium/free limits by plan. Includes max days per tier,
+  monthly generation allowance (0 = unlimited) and a per-trip AI cost alert (`planning_cost_alert` in the log).
+  Errors: `plan_limit` (trip too long for the plan), `generation_quota` (monthly allowance used).
+- Trip creation now accepts up to 365 days (it stopped at 90); what can actually be planned is decided by the limits above.
+- `AI_FAST_MODEL` (for example `gpt-4.1-mini`) is what makes the outline cheap; unset, the primary model is used.
+- Tests: `tests/unit/test_long_trip_planning.py`.
+
 ## Development: planning works without Redis
 
 - `CacheService` falls back to a small in-process store when Redis is unreachable and `ENVIRONMENT=development`, and stops

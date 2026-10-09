@@ -84,11 +84,15 @@ def build_generation_messages(
     activities: list[dict[str, Any]],
     forecast: list[dict[str, Any]],
     language: str = "en",
+    trip_context: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, str]]:
     system = _GENERATION_RULES.format(
         num_days=spec.num_days, travelers=spec.travelers, currency=currency,
         max_items=MAX_ITEMS_PER_DAY, schema=_SCHEMA_DESCRIPTION,
     )
+    if trip_context:     # one part of a longer trip (modules/planning/chunking.py)
+        system += "\n\nLONG-TRIP RULES (this overrides any conflicting rule above):\n" + "\n".join(
+            f"- {rule}" for rule in trip_context.get("rules", []))
     dates = [d.isoformat() for d in expected_dates(spec)]
     context = {
         "language": language,
@@ -105,6 +109,8 @@ def build_generation_messages(
         "verified_activities": activities,
         "weather_forecast": forecast,
     }
+    if trip_context:
+        context["long_trip"] = {k: v for k, v in trip_context.items() if k != "rules" and v}
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False, default=str)},

@@ -99,6 +99,8 @@ class PlanningPorts:
     opening_hours_enabled: bool = False
     max_opening_hours_lookups: int = 15
     opening_hours_timeout_seconds: float = 20.0
+    # Cheaper model tier for small side jobs (the long-trip route outline). None => use `llm`.
+    llm_fast: Optional[Callable[[list[dict[str, str]], float, int], Awaitable[str]]] = None
 
 
 class PlanningState(TypedDict, total=False):
@@ -109,6 +111,8 @@ class PlanningState(TypedDict, total=False):
     preferences: dict[str, Any]
     memories: list[str]
     options: dict[str, Any]          # {"city_code": "PAR", "include_hotels": bool, "include_activities": bool}
+    trip_context: dict[str, Any]     # long trips only: where this part sits in the whole trip (chunking.build_trip_context)
+    change_summary: str              # version note written with the plan
     # gathered
     geo: GeoPoint
     catalog: dict[str, dict[str, Any]]        # short id -> full provider record (hotels "h1", activities "a1")
@@ -288,6 +292,7 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
             memories=state.get("memories", []), geo=_geo_dict(state["geo"]),
             hotels=state.get("hotels_for_model", []), activities=state.get("activities_for_model", []),
             forecast=state.get("forecast", []), language=state.get("language", "en"),
+            trip_context=state.get("trip_context"),
         )
         return await _ask_model(messages, spec, currency, temperatures=(0.5, 0.2), notes=state.get("notes", []))
 
@@ -446,6 +451,8 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
             "data_sources": state.get("data_sources", {}),
             "currency": state["currency"],
         }
+        if state.get("change_summary"):
+            meta["change_summary"] = state["change_summary"]
         return {"result": await ports.persist(state["plan"], meta)}
 
     async def fail(state: PlanningState) -> dict[str, Any]:

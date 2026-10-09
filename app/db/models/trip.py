@@ -62,6 +62,9 @@ class Trip(UUIDPKMixin, TimestampMixin, Base):
     # AI-written summary of the trip (set by itinerary generation; user-editable later).
     overview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     current_version_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Long trips only (more days than the full-detail limit): the whole-trip route plus which parts have a detailed plan
+    # (modules/planning/outline.py). NULL for ordinary trips. Always assign a NEW dict: JSON columns do not track in-place edits.
+    planning_outline: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Trip id={self.id} destination={self.destination}>"

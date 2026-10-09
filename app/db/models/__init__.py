@@ -43,6 +43,7 @@ from app.db.models.pending_change import PendingItineraryChange  # noqa: F401
 from app.db.models.provider_cache import CurrencyRateCacheEntry, GeocodeCacheEntry  # noqa: F401
 from app.db.models.payment import Payment, PaymentWebhookEvent, SubscriptionEvent  # noqa: F401
 from app.db.models.place import Place  # noqa: F401
+from app.db.models.planning_policy import PlanningPolicy  # noqa: F401
 from app.db.models.saved_place import SavedPlace  # noqa: F401
 from app.db.models.preferences import UserPreferences  # noqa: F401
 from app.db.models.security import BlockedIP, LoginAttempt, SecurityEvent  # noqa: F401

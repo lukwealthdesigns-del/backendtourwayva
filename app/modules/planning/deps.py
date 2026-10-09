@@ -4,7 +4,7 @@ the LLM provider, and the database writer."""
 from __future__ import annotations
 
 import uuid
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,9 +36,14 @@ def build_ports(
     trip_id: uuid.UUID,
     llm: Optional[LLMProvider] = None,
     premium_ai: bool = False,
+    tier: Optional[str] = None,
+    day_offset: int = 0,
+    partial: bool = False,
+    after_save: Optional[Callable[[Any, Any], None]] = None,
 ) -> PlanningPorts:
     """`premium_ai` (the PREMIUM_AI feature) selects the strong model tier for planning;
-    everyone else plans on the default model."""
+    everyone else plans on the default model. `tier` overrides that choice (long trips: only the first detailed part
+    uses the strong tier). `day_offset`/`partial`/`after_save` write one part of a long trip (see PlanningPersistence)."""
     geocoding, hotels = GeocodingService(), HotelService()
     activities, weather, currency, images = ActivityService(), WeatherService(), CurrencyService(), ImageService()
     provider = llm or OpenAIProvider()
@@ -83,28 +88,35 @@ def build_ports(
     async def convert_rate(base: str, target: str) -> float:
         return (await currency.get_rate(base, target)).rate
 
-    async def llm_call(messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
-        response = await provider.generate(
-            messages, temperature=temperature, max_tokens=max_tokens,
-            tier="strong" if premium_ai else "default", timeout=settings.AI_PLANNING_TIMEOUT_SECONDS,
-        )
-        try:
-            from app.modules.analytics.service import AnalyticsService
-
-            await AnalyticsService(db).record_ai_usage(
-                user_id=user_id, feature="itinerary_generation", model_used=response.model_used,
-                prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
-                used_fallback=response.used_fallback, trip_id=trip_id,
+    def make_llm(model_tier: str, feature: str):
+        async def llm_call(messages: list[dict[str, str]], temperature: float, max_tokens: int) -> str:
+            response = await provider.generate(
+                messages, temperature=temperature, max_tokens=max_tokens,
+                tier=model_tier, timeout=settings.AI_PLANNING_TIMEOUT_SECONDS,
             )
-        except Exception as exc:  # noqa: BLE001 - metering must never break planning
-            await db.rollback()
-            logger.warning("planning_usage_record_failed", error=str(exc))
-        return response.content
+            try:
+                from app.modules.analytics.service import AnalyticsService
+
+                await AnalyticsService(db).record_ai_usage(
+                    user_id=user_id, feature=feature, model_used=response.model_used,
+                    prompt_tokens=response.prompt_tokens, completion_tokens=response.completion_tokens,
+                    used_fallback=response.used_fallback, trip_id=trip_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - metering must never break planning
+                await db.rollback()
+                logger.warning("planning_usage_record_failed", error=str(exc))
+            return response.content
+
+        return llm_call
+
+    llm_call = make_llm(tier or ("strong" if premium_ai else "default"), "itinerary_generation")
+    llm_fast_call = make_llm("fast", "itinerary_outline")       # cheaper model for the long-trip route outline
 
     return PlanningPorts(
         geocode=geocode, search_hotels=search_hotels, search_activities=search_activities, forecast=forecast,
         convert_rate=convert_rate, llm=llm_call,
-        persist=PlanningPersistence(db, trip_id=trip_id, actor_id=user_id),
+        persist=PlanningPersistence(db, trip_id=trip_id, actor_id=user_id, day_offset=day_offset, partial=partial, after_save=after_save),
+        llm_fast=llm_fast_call,
         resolve_city_code=resolve_city_code, image=hotel_image,
         opening_hours=opening_hours, opening_hours_enabled=hours_provider is not None,
         max_opening_hours_lookups=settings.OPENING_HOURS_MAX_LOOKUPS_PER_PLAN,

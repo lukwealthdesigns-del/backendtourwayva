@@ -24,6 +24,8 @@ from app.api.dependencies import get_current_user, rate_limit, require_feature
 from app.core.constants import FeatureFlag
 from app.db.models.user import User
 from app.db.session import get_db
+from app.modules.planning.policy import PlanningPolicyService
+from app.modules.planning.policy_schemas import EffectivePlanningLimits
 from app.modules.planning.schemas import (
     GenerateItineraryRequest,
     GenerationJobResponse,
@@ -33,6 +35,23 @@ from app.modules.planning.schemas import (
 from app.modules.planning.service import PlanningService
 
 router = APIRouter(prefix="/trips", tags=["Planning"])
+limits_router = APIRouter(prefix="/planning", tags=["Planning"])
+
+
+@limits_router.get("/limits", response_model=EffectivePlanningLimits)
+async def my_planning_limits(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """What the signed-in user can plan right now: the longest trip, how many days are planned in detail in one go,
+    the size of each detailed part for longer trips, and the monthly generation allowance (0 = unlimited). The trip
+    wizard reads this to set the calendar and to explain how long trips work. `growth` is true while the admin's
+    growth mode is on (the generous launch limits apply to everyone)."""
+    service = PlanningPolicyService(db)
+    limits = await service.limits_for(current_user.id)
+    used = await service.generations_this_month(current_user.id)
+    remaining = max(0, limits.monthly_limit - used) if limits.monthly_limit > 0 else -1     # -1 = unlimited
+    return EffectivePlanningLimits(
+        tier=limits.tier, growth=limits.growth, max_days=limits.max_days, full_detail_max_days=limits.full_detail_max_days,
+        chunk_days=limits.chunk_days, monthly_limit=limits.monthly_limit, used_this_month=used, remaining_this_month=remaining,
+    )
 
 
 @router.post(

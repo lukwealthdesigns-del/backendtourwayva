@@ -49,6 +49,8 @@ from app.modules.admin.user_management_service import UserManagementService
 from app.modules.entitlements.schemas import EntitlementsResponse, OverrideRequest
 from app.modules.entitlements.service import EntitlementService
 from app.modules.lifecycle.metrics import MetricsService
+from app.modules.planning.policy import PlanningPolicyService
+from app.modules.planning.policy_schemas import PlanningPolicyConfigResponse, PlanningPolicyUpdate
 from app.modules.payments.schemas import (
     AdminPaymentListResponse,
     AdminPaymentResponse,
@@ -717,3 +719,38 @@ async def get_revenue_dashboard(
     from app.modules.analytics.service import AnalyticsService
 
     return await AnalyticsService(db).get_revenue_dashboard(actor_id=current_user.id, window_days=window_days)
+
+
+# --- Itinerary planning limits (growth mode, long trips, monthly caps) ---
+
+@router.get("/planning-policy", response_model=PlanningPolicyConfigResponse,
+            dependencies=[Depends(require_admin_permission("plans:manage"))])
+async def get_planning_policy(db: AsyncSession = Depends(get_db)):
+    """The limits for itinerary generation. While `growth_mode` is on, every user gets the growth limits; switch it
+    off and the premium/free limits apply by plan. Requires the `plans:manage` admin permission."""
+    row = await PlanningPolicyService(db).get_row()
+    await db.commit()                  # persists the default row if this database had none
+    return PlanningPolicyConfigResponse.model_validate(row)
+
+
+@router.put("/planning-policy", response_model=PlanningPolicyConfigResponse,
+            dependencies=[Depends(require_admin_permission("plans:manage"))])
+async def update_planning_policy(
+    payload: PlanningPolicyUpdate,
+    current_user: User = Depends(get_current_user),
+    client_ip: Optional[str] = Depends(get_client_ip),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change any of the planning limits. Every change is audit-logged with what changed."""
+    updates = payload.model_dump(exclude_none=True)
+    before = PlanningPolicyConfigResponse.model_validate(await PlanningPolicyService(db).get_row()).model_dump()
+    row = await PlanningPolicyService(db).update(updates)
+    after = PlanningPolicyConfigResponse.model_validate(row).model_dump()
+    await AdminService(db).log(
+        admin_user_id=current_user.id, action="planning_policy.update", target_type="planning_policy",
+        result=AuditResult.SUCCESS, ip_address=client_ip,
+        metadata={"changed": {k: {"from": before[k], "to": after[k]} for k in after if before[k] != after[k]}},
+    )
+    await db.commit()
+    return PlanningPolicyConfigResponse.model_validate(row)
+
