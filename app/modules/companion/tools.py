@@ -156,16 +156,36 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_hotels",
-            "description": "Search live hotel offers for a city and date range via Amadeus.",
+            "description": (
+                "Find hotels in a destination. Results with kind=\"discovery\" are real places (name, address, rating, photo) "
+                "with NO room availability or price: never state a price or availability for them. Results with kind=\"inventory\" "
+                "carry a live price. Pass `destination` (free text); `city_code` is optional and only enables live prices."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "city_code": {"type": "string", "description": "3-letter IATA city code, e.g. PAR"},
+                    "destination": {"type": "string", "description": "City or area, e.g. Paris, France"},
+                    "city_code": {"type": "string", "description": "Optional 3-letter IATA city code, e.g. PAR (enables live prices)"},
                     "check_in": {"type": "string", "description": "YYYY-MM-DD"},
                     "check_out": {"type": "string", "description": "YYYY-MM-DD"},
                     "adults": {"type": "integer", "default": 1},
                 },
-                "required": ["city_code", "check_in", "check_out"],
+                "required": ["destination", "check_in", "check_out"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_flight_status",
+            "description": "Look up the live status of a specific flight by number (e.g. BA75): scheduled, active, landed, cancelled, delays, terminal and gate. found=false means no record: say so, never guess.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "flight_iata": {"type": "string", "description": "Flight number such as BA75"},
+                    "flight_date": {"type": "string", "description": "Optional YYYY-MM-DD"},
+                },
+                "required": ["flight_iata"],
             },
         },
     },
@@ -586,12 +606,28 @@ async def _search_hotels(args: dict, ctx: ToolExecutionContext) -> dict:
     if check_in is None or check_out is None:
         raise AppError("check_in and check_out are required.")
 
-    result = await HotelService().search(
-        city_code=str(args.get("city_code", "")),
-        check_in=check_in,
-        check_out=check_out,
-        adults=int(args.get("adults", 1)),
+    service = HotelService()
+    city_code = str(args.get("city_code", "") or "").strip()
+    if len(city_code) == 3 and service.inventory_available():
+        result = await service.search(city_code=city_code, check_in=check_in, check_out=check_out, adults=int(args.get("adults", 1)))
+        return result.model_dump(mode="json")
+
+    destination = str(args.get("destination", "") or "").strip()
+    if not destination:
+        raise AppError("A destination is required.")
+    from app.modules.geocoding.service import GeocodingService
+
+    place = await GeocodingService().forward_geocode(destination)
+    result = await service.discover(
+        destination=destination, latitude=place.latitude, longitude=place.longitude, check_in=check_in, check_out=check_out,
     )
+    return result.model_dump(mode="json")
+
+
+async def _get_flight_status(args: dict, ctx: ToolExecutionContext) -> dict:
+    from app.modules.flight_status.service import FlightStatusService
+
+    result = await FlightStatusService().get(flight_iata=str(args.get("flight_iata", "")), flight_date=args.get("flight_date") or None)
     return result.model_dump(mode="json")
 
 
@@ -942,6 +978,7 @@ _HANDLERS = {
     "get_trip_itinerary": _get_trip_itinerary,
     "search_hotels": _search_hotels,
     "search_flights": _search_flights,
+    "get_flight_status": _get_flight_status,
     "search_activities": _search_activities,
     "get_weather": _get_weather,
     "convert_currency": _convert_currency,

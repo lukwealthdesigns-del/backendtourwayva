@@ -65,6 +65,13 @@ def build_ports(
     async def resolve_city_code(destination: str) -> Optional[str]:
         return await hotels.resolve_city_code(destination)
 
+    async def discover_hotels(destination: str, latitude: float, longitude: float, check_in, check_out) -> list[dict[str, Any]]:
+        response = await hotels.discover(
+            destination=destination, latitude=latitude, longitude=longitude,
+            check_in=check_in, check_out=check_out, max_hotels=_MAX_HOTELS,
+        )
+        return [r.model_dump() for r in response.results]
+
     async def hotel_image(hotel_name: str) -> Optional[dict[str, str]]:
         if not hotel_name:
             return None
@@ -118,6 +125,7 @@ def build_ports(
         persist=PlanningPersistence(db, trip_id=trip_id, actor_id=user_id, day_offset=day_offset, partial=partial, after_save=after_save),
         llm_fast=llm_fast_call,
         resolve_city_code=resolve_city_code, image=hotel_image,
+        discover_hotels=discover_hotels, hotel_discovery_enabled=hotels.discovery_available(),
         opening_hours=opening_hours, opening_hours_enabled=hours_provider is not None,
         max_opening_hours_lookups=settings.OPENING_HOURS_MAX_LOOKUPS_PER_PLAN,
         opening_hours_timeout_seconds=float(settings.OPENING_HOURS_TOTAL_TIMEOUT_SECONDS),

@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, require_feature
+from app.api.dependencies import get_current_user_or_guest, get_current_user, require_feature
 from app.core.constants import FeatureFlag
 from app.db.models.user import User
 from app.db.session import get_db
@@ -122,7 +122,7 @@ async def delete_trip_cost(
 async def calculate_trip_route(
     trip_id: uuid.UUID,
     payload: TripRouteRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Cache-first: returns a stored TripRoute if this exact
@@ -143,7 +143,7 @@ async def calculate_trip_route(
 @router.get("/{trip_id}/routes", response_model=list[TripRouteResponse])
 async def list_trip_routes(
     trip_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     routes = await TripExtrasService(db).list_routes(trip_id=trip_id, user_id=current_user.id)

@@ -65,6 +65,10 @@ class BrevoEmailProvider(EmailProvider):
     async def send_transactional_email(
         self, *, to_email: str, subject: str, html_content: str, category: str = "transactional"
     ) -> bool:
+        if to_email.strip().lower().endswith(".invalid"):
+            # ".invalid" is reserved and can never be delivered: it is the placeholder address of a guest. A guest
+            # has no mailbox, so there is nothing to send and nothing to log as a failure.
+            return False
         if not settings.BREVO_API_KEY:
             await self._log(to_email, subject, category, success=False, error_message="Email provider is not configured.")
             raise ProviderUnavailableError("Email provider is not configured.")

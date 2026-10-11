@@ -62,7 +62,7 @@ INTENT_TOOLS: dict[Intent, tuple[str, ...]] = {
                             "get_saved_places", "save_place", "replace_hotel", "add_flight_to_trip"),
     Intent.HOTEL_SEARCH: ("search_hotels", "get_trip", "geocode", "convert_currency", "get_my_memories",
                           "calculate_route", "save_place"),
-    Intent.FLIGHT_SEARCH: ("search_flights", "get_trip", "convert_currency", "get_my_memories", "add_flight_to_trip"),
+    Intent.FLIGHT_SEARCH: ("search_flights", "get_flight_status", "get_trip", "convert_currency", "get_my_memories", "add_flight_to_trip"),
     Intent.ACTIVITY_SEARCH: ("search_activities", "search_places", "get_trip", "geocode", "get_weather",
                              "get_my_memories", "search_travel_knowledge", "calculate_route", "save_place", "show_place_photos"),
     Intent.WEATHER_QUERY: ("get_weather", "geocode", "get_trip"),
@@ -81,6 +81,7 @@ INTENT_TOOLS: dict[Intent, tuple[str, ...]] = {
 TOOL_FEATURES: dict[str, FeatureFlag] = {
     "search_hotels": FeatureFlag.HOTELS,
     "search_flights": FeatureFlag.FLIGHTS,
+    "get_flight_status": FeatureFlag.FLIGHTS,
     "search_activities": FeatureFlag.ACTIVITIES,
     "get_weather": FeatureFlag.WEATHER,
     "search_destinations": FeatureFlag.DISCOVER,
@@ -112,8 +113,8 @@ INTENT_GUIDANCE: dict[Intent, str] = {
         "cheaper, remove a day, more relaxed, less walking, replace a hotel) call propose_itinerary_revision with the "
         "user's request in plain words. Nothing changes until the user confirms — say so clearly."
     ),
-    Intent.HOTEL_SEARCH: "The user is looking for accommodation. Use search_hotels; never state a price or availability you did not get from it.",
-    Intent.FLIGHT_SEARCH: "The user is looking for flights. Use search_flights; never invent flight numbers, times or prices.",
+    Intent.HOTEL_SEARCH: "The user is looking for accommodation. Use search_hotels. Hotels with kind=discovery are real places with NO verified price or availability: describe their rating, area and photos, never a price or room availability. Only kind=inventory hotels have a live price.",
+    Intent.FLIGHT_SEARCH: "The user is looking for flights. Use search_flights for fares and get_flight_status for a specific flight; never invent flight numbers, times, prices or statuses. Fares from search_flights may be cached guide prices: say so when data_status is CACHED.",
     Intent.ACTIVITY_SEARCH: "The user wants things to do. Prefer search_activities / search_places over guessing.",
     Intent.WEATHER_QUERY: "Use get_weather; if the date is beyond the forecast range, say the forecast is not available yet.",
     Intent.CURRENCY_QUERY: "Use convert_currency and state the rate's source is live.",
@@ -141,7 +142,7 @@ _RULES: list[tuple[Intent, re.Pattern[str]]] = [
         r"|\bhow much is\b.{0,20}\b(in|into)\b\s+[a-z]{3}\b", _R)),
     (Intent.ACCOUNT_QUERY, re.compile(
         r"\bmy (account|profile|username|email|subscription|trial|password)\b|\b(am i|are we) (on|subscribed)\b", _R)),
-    (Intent.FLIGHT_SEARCH, re.compile(r"\b(flights?|airfare|airlines?|fly (to|from))\b", _R)),
+    (Intent.FLIGHT_SEARCH, re.compile(r"\b(flights?|airfare|airlines?|fly (to|from)|flight status|on time|delayed|departure gate|boarding)\b", _R)),
     (Intent.HOTEL_SEARCH, re.compile(r"\b(hotels?|hostels?|accommodation|where to stay|place to stay|airbnb)\b", _R)),
     (Intent.WEATHER_QUERY, re.compile(r"\b(weather|forecast|temperature|rain(y|ing)?|snow(ing)?|umbrella|sunny)\b", _R)),
     (Intent.DISCOVERY, re.compile(

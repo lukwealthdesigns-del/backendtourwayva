@@ -29,7 +29,7 @@ class HotelOffer:
 class ReplacementPlan:
     title: str
     description: Optional[str]
-    estimated_cost: float
+    estimated_cost: Optional[float]
     currency: str
     provider: str
     external_id: str
@@ -41,6 +41,8 @@ class ReplacementPlan:
 def convert_offer_cost(offer: HotelOffer, *, trip_currency: str, rate: Optional[float]) -> Optional[float]:
     """`rate` is 1 unit of the offer's currency expressed in `trip_currency`. None (rate
     unavailable) means the cost cannot be honestly stated — never guess an exchange rate."""
+    if offer.price_total is None or not offer.currency:
+        return None                      # a discovery hotel has no verified price: leave the cost unknown
     if offer.currency.upper() == trip_currency.upper():
         return round(offer.price_total, 2)
     if rate is None:
@@ -55,8 +57,8 @@ def build_replacement(
     return ReplacementPlan(
         title=offer.hotel_name,
         description=offer.room_description,
-        estimated_cost=cost if cost is not None else 0.0,
-        currency=trip_currency if cost is not None else offer.currency,
+        estimated_cost=cost,
+        currency=trip_currency if cost is not None else (offer.currency or trip_currency),
         provider=offer.provider,
         external_id=offer.hotel_id,
         latitude=offer.latitude,

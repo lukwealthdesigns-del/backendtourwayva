@@ -44,6 +44,7 @@ from app.modules.companion.graph import CompanionPorts, CompanionState, build_co
 from app.modules.companion.intents import NEEDS_TRIP_CONTEXT, USES_PERSONALIZATION, Intent
 from app.modules.companion.memory_extraction import maybe_extract_memory
 from app.modules.companion.schemas import ConversationCreateRequest
+from app.modules.companion.smalltalk import detect_smalltalk, smalltalk_reply
 from app.modules.companion.summarization import maybe_summarize
 from app.modules.companion.tools import TOOL_SCHEMAS, ToolExecutionContext, execute_tool
 from app.modules.memory.service import MemoryService
@@ -112,9 +113,20 @@ class CompanionService:
         memory extraction are NOT run here: the caller runs `post_turn()` after responding, so the user is not kept
         waiting for two extra model calls that do not change the reply."""
         asked_at = datetime.now(timezone.utc)
+        kind = detect_smalltalk(content)
+        if user.is_guest and kind is None:
+            # A guest's allowance counts real AI answers only: greetings and thanks cost nothing and are free. Spent
+            # BEFORE anything is saved, so a refused message leaves no trace.
+            from app.modules.guest.service import GuestService
+
+            await GuestService(self.db).consume_companion_message(user.id)
         await self.repo.add_message(
             Message(conversation_id=conversation.id, role=MessageRole.USER, content=content, created_at=asked_at)
         )
+
+        # "Hi", "thanks", "bye": answered at once from a short reply, with no model call, tools or memory lookups.
+        if kind is not None:
+            return await self._answer_smalltalk(conversation=conversation, user=user, kind=kind, asked_at=asked_at, emit=emit)
 
         history = await self.repo.list_messages(conversation.id, limit=_MAX_HISTORY_MESSAGES)
         chat_history = [
@@ -124,7 +136,8 @@ class CompanionService:
         ports = self._build_ports(conversation, user, emit)
         state = await self._runner(
             build_companion_spec(ports),
-            {"user_message": content, "history": chat_history, "usage": [], "tools_used": []},
+            # `has_trip` lets the graph skip the classification model call for an ordinary trip-less question.
+            {"user_message": content, "history": chat_history, "usage": [], "tools_used": [], "has_trip": conversation.trip_id is not None},
         )
 
         reply = state.get("reply") or "Sorry, I could not produce an answer. Please try again."
@@ -144,6 +157,22 @@ class CompanionService:
             await self.post_turn(conversation=conversation, user=user, content=content, reply=reply)
 
         return assistant_message
+
+    async def _answer_smalltalk(
+        self, *, conversation: Conversation, user: User, kind: str, asked_at: datetime,
+        emit: Optional[Callable[[dict], Awaitable[None]]] = None,
+    ) -> Message:
+        reply = smalltalk_reply(kind, language=user.language, first_name=user.first_name)
+        if emit is not None:
+            await emit({"type": "delta", "text": reply})
+        message = Message(
+            conversation_id=conversation.id, role=MessageRole.ASSISTANT, content=reply,
+            model_used=None, created_at=reply_timestamp(asked_at), meta=None,
+        )
+        await self.repo.add_message(message)
+        await self.db.commit()
+        await self._record_turn(user, {"usage": [], "intent_source": "smalltalk", "tools_used": []}, trip_id=conversation.trip_id)
+        return message
 
     @staticmethod
     def _meta_from(collected: Optional[dict]) -> Optional[dict]:

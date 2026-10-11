@@ -18,6 +18,12 @@ class ActivityResult:
     picture_url: Optional[str]
     booking_link: Optional[str]
     provider: str
+    # Discovery details (Google Places); the defaults keep every other provider's construction valid.
+    rating: Optional[float] = None
+    user_rating_count: Optional[int] = None
+    address: Optional[str] = None
+    maps_url: Optional[str] = None
+    website: Optional[str] = None
 
 
 class ActivityProvider(ABC):

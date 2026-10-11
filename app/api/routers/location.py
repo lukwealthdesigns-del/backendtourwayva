@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_client_ip, get_current_user, rate_limit
+from app.api.dependencies import get_current_user_or_guest, get_client_ip, get_current_user, rate_limit
 from app.db.models.user import User
 from app.modules.geocoding.schemas import (
     ForwardGeocodeRequest,
@@ -22,12 +22,12 @@ _locator = ApproximateLocationService()
 
 
 @router.post("/geocode", response_model=GeocodeResponse, dependencies=[Depends(rate_limit(bucket="location:geocode:geocode", max_requests=60, window_seconds=300, per="user"))])
-async def geocode(payload: ForwardGeocodeRequest, current_user: User = Depends(get_current_user)):
+async def geocode(payload: ForwardGeocodeRequest, current_user: User = Depends(get_current_user_or_guest)):
     return await _service.forward_geocode(payload.query)
 
 
 @router.post("/suggest", response_model=LocationSuggestResponse, dependencies=[Depends(rate_limit(bucket="location:suggest", max_requests=240, window_seconds=300, per="user"))])
-async def suggest_locations(payload: LocationSuggestRequest, current_user: User = Depends(get_current_user)):
+async def suggest_locations(payload: LocationSuggestRequest, current_user: User = Depends(get_current_user_or_guest)):
     """Autocomplete for every location picker (header location, Traveling from, trip start and destination): up to
     `limit` cities, regions and countries worldwide matching what the user has typed. Cached; empty list when nothing
     matches. 503 `provider_unavailable` if geocoding is not configured."""
@@ -35,13 +35,13 @@ async def suggest_locations(payload: LocationSuggestRequest, current_user: User 
 
 
 @router.post("/reverse-geocode", response_model=GeocodeResponse, dependencies=[Depends(rate_limit(bucket="location:geocode:reverse_geocode", max_requests=60, window_seconds=300, per="user"))])
-async def reverse_geocode(payload: ReverseGeocodeRequest, current_user: User = Depends(get_current_user)):
+async def reverse_geocode(payload: ReverseGeocodeRequest, current_user: User = Depends(get_current_user_or_guest)):
     return await _service.reverse_geocode(payload.latitude, payload.longitude)
 
 
 @router.get("/approximate", response_model=ApproximateLocationResponse, dependencies=[Depends(rate_limit(bucket="location:approximate", max_requests=30, window_seconds=300, per="user"))])
 async def approximate_location(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     client_ip: str | None = Depends(get_client_ip),
 ):
     """IP-based approximate location of the caller (city-level: city, region, country, coordinates,

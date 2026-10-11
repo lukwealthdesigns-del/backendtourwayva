@@ -56,6 +56,7 @@ class FlightBookingService:
     def __init__(self, db: AsyncSession, flight_provider: Optional[FlightProvider] = None):
         self.db = db
         self.repo = TripRepository(db)
+        self._injected_provider = flight_provider
         self._flight_provider = flight_provider or AmadeusFlightProvider()
 
     async def add_to_trip(
@@ -118,6 +119,10 @@ class FlightBookingService:
         actually confirmed live. Never raises — an inability to verify
         degrades to `price_verified=False`, it never blocks adding the
         flight (Blueprint §78 graceful degradation)."""
+        if self._injected_provider is None and offer.provider != "amadeus":
+            # Price data from other providers (e.g. Travelpayouts) is cached, not quotable live: it is added as the
+            # price the traveller saw, marked unverified, never as a confirmed fare.
+            return offer, False
         try:
             repriced = await self._flight_provider.reprice_offer(offer_id=offer.offer_id)
         except Exception as exc:  # noqa: BLE001

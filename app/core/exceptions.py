@@ -63,6 +63,22 @@ class GenerationQuotaError(AppError):
     error_code = "generation_quota"
 
 
+class GuestSessionExpiredError(AppError):
+    """The guest session is unknown, expired or already claimed. 410 (not 401) so the app can tell it apart from an
+    expired sign-in token, which it refreshes."""
+
+    status_code = 410
+    error_code = "guest_session_expired"
+
+
+class GuestLimitError(AppError):
+    """A guest used up an allowance (Companion messages, generations, trips). `details` names it so the app can offer
+    to create an account instead of showing a bare error."""
+
+    status_code = 403
+    error_code = "guest_limit_reached"
+
+
 class PaymentRequiredError(AppError):
     """The requested action needs a completed payment (e.g. a paid plan)."""
 

@@ -23,6 +23,14 @@ class ActivityResponse(BaseModel):
     picture_url: Optional[str] = None
     booking_link: Optional[str] = None
     provider: str
+    rating: Optional[float] = None
+    user_rating_count: Optional[int] = None
+    address: Optional[str] = None
+    maps_url: Optional[str] = None
+    website: Optional[str] = None
+    data_status: Optional[str] = None
+    last_verified_at: Optional[str] = None
+    expires_at: Optional[str] = None
 
 
 class ActivitySearchResponse(BaseModel):

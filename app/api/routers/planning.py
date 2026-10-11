@@ -20,7 +20,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, rate_limit, require_feature
+from app.api.dependencies import get_current_user_or_guest, get_current_user, rate_limit, require_feature
 from app.core.constants import FeatureFlag
 from app.db.models.user import User
 from app.db.session import get_db
@@ -39,7 +39,7 @@ limits_router = APIRouter(prefix="/planning", tags=["Planning"])
 
 
 @limits_router.get("/limits", response_model=EffectivePlanningLimits)
-async def my_planning_limits(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def my_planning_limits(current_user: User = Depends(get_current_user_or_guest), db: AsyncSession = Depends(get_db)):
     """What the signed-in user can plan right now: the longest trip, how many days are planned in detail in one go,
     the size of each detailed part for longer trips, and the monthly generation allowance (0 = unlimited). The trip
     wizard reads this to set the calendar and to explain how long trips work. `growth` is true while the admin's
@@ -67,7 +67,7 @@ async def generate_itinerary(
     payload: GenerateItineraryRequest,
     response: Response,
     idempotency_key: Optional[str] = Header(default=None, min_length=8, max_length=100),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Builds the trip's itinerary from live data: destination verified by
@@ -92,7 +92,7 @@ async def generate_itinerary(
 async def get_generation_job(
     trip_id: uuid.UUID,
     job_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     return GenerationJobResponse(**await PlanningService(db).get_job(trip_id=trip_id, job_id=job_id, user=current_user))
@@ -105,7 +105,7 @@ async def get_generation_job(
 async def cancel_generation_job(
     trip_id: uuid.UUID,
     job_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Stop a queued or running generation. The trip is left unchanged (nothing is saved until the last step). Returns
@@ -115,7 +115,7 @@ async def cancel_generation_job(
 
 @router.get("/{trip_id}/preferences", response_model=TripPreferencesResponse)
 async def get_trip_preferences(
-    trip_id: uuid.UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    trip_id: uuid.UUID, current_user: User = Depends(get_current_user_or_guest), db: AsyncSession = Depends(get_db)
 ):
     prefs = await PlanningService(db).get_preferences(trip_id=trip_id, user=current_user)
     return TripPreferencesResponse.model_validate(prefs) if prefs else TripPreferencesResponse()
@@ -125,7 +125,7 @@ async def get_trip_preferences(
 async def update_trip_preferences(
     trip_id: uuid.UUID,
     payload: TripPreferencesPayload,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     prefs = await PlanningService(db).save_preferences(trip_id=trip_id, user=current_user, payload=payload)

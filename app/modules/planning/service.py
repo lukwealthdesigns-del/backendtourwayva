@@ -312,11 +312,14 @@ class PlanningService:
         total = (trip.end_date - trip.start_date).days + 1
         details = {"max_days": limits.max_days, "tier": limits.tier, "trip_days": total}
         if total > limits.max_days:
+            if limits.tier == "guest":
+                raise PlanLimitError(f"Guests can plan trips of up to {limits.max_days} days. This trip is {total} days long. Create a free account to plan longer trips.", details)
             raise PlanLimitError(f"Your plan plans trips of up to {limits.max_days} days. This trip is {total} days long.", details)
         used = await policy.generations_this_month(user_id)
         if limits.monthly_limit > 0 and used >= limits.monthly_limit:
             raise GenerationQuotaError(
-                f"You have used all {limits.monthly_limit} itinerary generations included this month.",
+                ("You've used the free itinerary generations in this guest session. Create a free account to plan more."
+                 if limits.tier == "guest" else f"You have used all {limits.monthly_limit} itinerary generations included this month."),
                 {**details, "monthly_limit": limits.monthly_limit, "used_this_month": used},
             )
         if total <= limits.full_detail_max_days:

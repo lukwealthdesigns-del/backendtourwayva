@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import TokenType, decode_token
+from app.modules.guest.rules import GUEST_SESSION_HEADER, hash_token
 from app.db.models.user import User
 from app.db.session import get_db
 from app.repositories.user_repository import UserRepository
@@ -87,6 +88,30 @@ async def get_current_user(
     return user
 
 
+async def get_current_user_or_guest(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """The caller: a signed-in user (bearer token), or else a GUEST identified by the X-Guest-Session header.
+
+    Only endpoints a guest is allowed to use depend on this; everything else keeps `get_current_user`, which accepts
+    bearer tokens only, so a guest session can never reach account-only features. A bearer token always wins over a
+    guest header. The guest token's validity (exists, active, not expired) is checked here on every request."""
+    if credentials is not None:
+        return await get_current_user(credentials, db)
+    token = request.headers.get(GUEST_SESSION_HEADER)
+    if not token:
+        raise UnauthorizedError("Authentication required.")
+    from app.modules.guest.service import GuestService
+
+    _session, user = await GuestService(db).authenticate(token)
+    from app.db.rls import set_rls_user
+
+    await set_rls_user(db, user.id)
+    return user
+
+
 async def get_current_session_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
 ) -> str | None:
@@ -121,7 +146,7 @@ def require_feature(flag):
     """
 
     async def _dependency(
-        current_user: User = Depends(get_current_user),
+        current_user: User = Depends(get_current_user_or_guest),
         db: AsyncSession = Depends(get_db),
     ) -> None:
         from app.modules.entitlements.service import EntitlementService
@@ -159,10 +184,15 @@ def rate_limit(*, bucket: str, max_requests: int, window_seconds: int, per: str 
             # get_current_user call in this request's dependency
             # chain, without re-verifying the token a second time.
             token_credentials = await _bearer_scheme(request)
-            if token_credentials is None:
-                raise UnauthorizedError("Authentication required.")
-            payload = decode_token(token_credentials.credentials, TokenType.ACCESS)
-            key = f"{bucket}:{payload.get('sub', 'unknown')}"
+            if token_credentials is not None:
+                payload = decode_token(token_credentials.credentials, TokenType.ACCESS)
+                key = f"{bucket}:{payload.get('sub', 'unknown')}"
+            else:
+                # A guest is limited per guest session (a hash of its token), never per shared IP address.
+                guest_token = request.headers.get(GUEST_SESSION_HEADER)
+                if not guest_token:
+                    raise UnauthorizedError("Authentication required.")
+                key = f"{bucket}:g:{hash_token(guest_token)[:24]}"
         else:
             key = f"{bucket}:{client_ip or 'unknown'}"
 

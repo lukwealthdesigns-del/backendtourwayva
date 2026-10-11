@@ -46,6 +46,7 @@ class OpenRouteServiceProvider(MapProvider):
         destination_lat: float,
         destination_lon: float,
         mode: TravelMode,
+        include_polyline: bool = False,   # ORS returns a different geometry encoding; the path is not offered by this provider
     ) -> RouteResult:
         if mode == TravelMode.TRANSIT:
             raise ValidationAppError("Transit routing is not supported by the configured maps provider.")

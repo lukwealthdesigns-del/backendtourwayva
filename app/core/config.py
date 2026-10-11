@@ -250,6 +250,35 @@ class Settings(BaseSettings):
     OPENING_HOURS_TOTAL_TIMEOUT_SECONDS: int = 20
     ORS_API_KEY: str = ""  # OpenRouteService — maps/routing provider
 
+    # --- Guest mode ("Explore first. Commit later.") ---
+    # All of these are enforced SERVER-side; the app only displays what the API reports (GET /guest/session).
+    GUEST_MODE_ENABLED: bool = True
+    GUEST_SESSION_TTL_HOURS: int = 48            # sliding: every use pushes expiry out by this much of inactivity
+    GUEST_COMPANION_MESSAGES: int = 8            # AI messages per guest session
+    GUEST_GENERATIONS: int = 2                   # itinerary generations per guest session (one full plan + one refinement)
+    GUEST_MAX_TRIPS: int = 3                     # temporary trips per guest session
+    GUEST_MAX_TRIP_DAYS: int = 10                # longest trip a guest can generate
+    GUEST_SESSIONS_PER_IP_PER_DAY: int = 20      # new guest sessions one network can open per day (an abuse signal, not identity)
+    GUEST_CLEANUP_BATCH: int = 200               # expired sessions removed per cleanup run
+
+    # --- Multi-provider travel layer (capabilities, not vendors) ---
+    # One SERVER-side Google Maps Platform key (never sent to browsers) with "Places API (New)" and "Routes API" enabled.
+    GOOGLE_MAPS_API_KEY: str = ""
+    GOOGLE_PLACES_PHOTO_MAX_WIDTH: int = 800
+    TRAVELPAYOUTS_TOKEN: str = ""        # flight price data + affiliate deep links
+    TRAVELPAYOUTS_MARKER: str = ""       # your affiliate marker, appended to booking links
+    AVIATIONSTACK_API_KEY: str = ""      # flight status / aviation data
+    # Aviationstack's free plan is HTTP-only; paid plans support HTTPS. Set this to match your plan.
+    AVIATIONSTACK_BASE_URL: str = "https://api.aviationstack.com/v1"
+    # Which provider answers each capability, in priority order (comma-separated). A provider is only used when it is
+    # configured (its key is set), so a deployment with no Amadeus credentials simply never calls Amadeus.
+    HOTEL_DISCOVERY_PROVIDERS: str = "google_places"
+    HOTEL_INVENTORY_PROVIDERS: str = "amadeus"        # live rooms and prices; Google Places is NEVER inventory
+    ACTIVITY_PROVIDERS: str = "google_places,amadeus"
+    FLIGHT_PROVIDERS: str = "travelpayouts,amadeus"
+    FLIGHT_STATUS_PROVIDERS: str = "aviationstack"
+    ROUTING_PROVIDERS: str = "google_routes,openrouteservice"
+
     # --- Uploads ---
     MAX_AVATAR_SIZE_MB: int = 5
     MAX_ATTACHMENT_SIZE_MB: int = 20

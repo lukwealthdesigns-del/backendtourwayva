@@ -15,12 +15,17 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.constants import AuditResult, BroadcastStatus
+from app.core.logging import get_logger
 from app.core.exceptions import NotFoundError
 from app.db.models.admin import BroadcastJob
 from app.modules.admin.admin_service import AdminService
 from app.modules.admin.schemas import CreateBroadcastRequest
 from app.repositories.admin_repository import AdminRepository
+
+
+logger = get_logger(__name__)
 
 
 class BroadcastService:
@@ -49,9 +54,21 @@ class BroadcastService:
         # app/workers/broadcast_tasks.py. Import kept local to avoid
         # importing Celery machinery on every request that merely
         # imports this service.
-        from app.workers.broadcast_tasks import send_broadcast_task
+        from app.workers.broadcast_tasks import run_broadcast, send_broadcast_task
 
-        send_broadcast_task.delay(str(job.id))
+        if settings.tasks_execution == "inline":
+            # Development/tests have no worker: send now. (Staging and production hand the job to the worker below.)
+            await run_broadcast(job.id)
+            await self.db.refresh(job)
+            return job
+
+        try:
+            send_broadcast_task.delay(str(job.id))
+        except Exception as exc:  # noqa: BLE001 - the broker is unreachable; do not leave the job "pending" forever
+            logger.error("broadcast_enqueue_failed", broadcast_id=str(job.id), error=str(exc))
+            job.status = BroadcastStatus.FAILED
+            job.failure_reason = "The background worker could not be reached, so nothing was sent. Check that Redis and the worker are running, then send again."
+            await self.db.commit()
 
         return job
 

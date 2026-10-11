@@ -67,6 +67,10 @@ async def _no_opening_hours() -> Optional[str]:
     return None
 
 
+async def _no_hotels() -> list[dict[str, Any]]:
+    return []
+
+
 # Item types whose visiting hours matter and are worth a lookup.
 _HOURS_TYPES = ("activity", "attraction", "restaurant")
 MAX_HOTELS_FOR_MODEL = 8
@@ -90,6 +94,11 @@ class PlanningPorts:
     # client did not supply one, so hotels are no longer silently skipped for that reason.
     # Default: no-op (always None) — behaviour is unchanged for any caller that omits it.
     resolve_city_code: Callable[[str], Awaitable[Optional[str]]] = lambda destination: _no_city_code()
+    # Hotel DISCOVERY (which hotels exist near the destination: name, place, rating, photo; NO price or availability).
+    # Used when there is no live-inventory city code, so hotels are no longer skipped just because Amadeus is absent.
+    # (destination, latitude, longitude, check_in, check_out) -> records with price_total None. Default: none.
+    discover_hotels: Callable[[str, float, float, date, date], Awaitable[list[dict[str, Any]]]] = lambda *a: _no_hotels()
+    hotel_discovery_enabled: bool = False
     # Fetches a small image for a hotel name (Discover-style enrichment). Default: no-op.
     image: Callable[[str], Awaitable[Optional[dict[str, str]]]] = lambda name: _no_image()
     # Opening hours (raw OSM `opening_hours` string) for a venue: (name, latitude, longitude) -> str | None.
@@ -174,8 +183,9 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
             except Exception as exc:  # noqa: BLE001 - hotels are simply skipped if this fails, like today
                 logger.warning("planning_city_code_resolution_failed: %s", exc)
 
+        inventory_ok = len(city_code) == 3
         wanted = {
-            "hotels": bool(options.get("include_hotels", True)) and len(city_code) == 3,
+            "hotels": bool(options.get("include_hotels", True)) and (inventory_ok or ports.hotel_discovery_enabled),
             "activities": bool(options.get("include_activities", True)),
             # Outside the forecast horizon we say nothing rather than guess.
             "weather": spec.start_date <= today + timedelta(days=FORECAST_HORIZON_DAYS) and spec.end_date >= today,
@@ -183,7 +193,21 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
 
         async def hotels() -> list[dict[str, Any]]:
             adults = max(1, min(spec.travelers, 9))
-            return await ports.search_hotels(city_code, spec.start_date, spec.end_date, adults)
+            inventory_error: Optional[Exception] = None
+            if inventory_ok:
+                try:
+                    found = await ports.search_hotels(city_code, spec.start_date, spec.end_date, adults)
+                    if found or not ports.hotel_discovery_enabled:
+                        return found
+                except Exception as exc:  # noqa: BLE001 - fall back to discovery when it exists, else report the failure
+                    inventory_error = exc
+                    if not ports.hotel_discovery_enabled:
+                        raise
+            if ports.hotel_discovery_enabled:
+                if inventory_error is not None:
+                    logger.warning("planning_hotel_inventory_unavailable_using_discovery: %s", inventory_error)
+                return await ports.discover_hotels(spec.destination, geo.latitude, geo.longitude, spec.start_date, spec.end_date)
+            return []
 
         async def activities() -> list[dict[str, Any]]:
             return await ports.search_activities(geo.latitude, geo.longitude)
@@ -252,6 +276,9 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
         # Best-effort thumbnail for the top few hotels only (bounded cost/latency); a failed
         # or missing image never blocks planning — the item is simply shown without one.
         for record in priced_hotels[:MAX_HOTEL_IMAGES]:
+            if record.get("photo_url"):          # discovery results already carry their own photo
+                record["picture_url"] = record["photo_url"]
+                continue
             try:
                 found = await ports.image(record.get("hotel_name") or "")
                 if found:
@@ -261,12 +288,17 @@ def make_nodes(ports: PlanningPorts) -> dict[str, Callable[[dict[str, Any]], Awa
 
         for n, record in enumerate(priced_hotels[:MAX_HOTELS_FOR_MODEL], start=1):
             key = f"h{n}"
-            catalog[key] = {**record, "kind": "hotel"}
-            for_model_hotels.append(
-                {"id": key, "name": record.get("hotel_name"), "room": record.get("room_description"),
-                 "total_cost_for_stay": record["group_cost"], "currency": target,
-                 "latitude": record.get("latitude"), "longitude": record.get("longitude")}
-            )
+            if record.get("photo_url") and not record.get("picture_url"):
+                record["picture_url"] = record["photo_url"]
+            catalog[key] = {**record, "offer_kind": record.get("kind"), "kind": "hotel"}
+            entry = {"id": key, "name": record.get("hotel_name"), "room": record.get("room_description"),
+                     "total_cost_for_stay": record["group_cost"], "currency": target,
+                     "latitude": record.get("latitude"), "longitude": record.get("longitude")}
+            if record.get("kind") == "discovery":
+                # A real place with NO verified room or price: the model must not state or invent either.
+                entry.update({"price_known": False, "rating": record.get("rating"), "price_level": record.get("price_level"),
+                              "address": record.get("address")})
+            for_model_hotels.append(entry)
 
         for n, record in enumerate(state.get("raw_activities", [])[:MAX_ACTIVITIES_FOR_MODEL], start=1):
             key = f"a{n}"
@@ -478,11 +510,11 @@ def _apply_provider_record(item: PlannedItem, record: dict[str, Any], travelers:
         item.item_type = "hotel"
         item.title = record.get("hotel_name") or item.title
         item.location_name = item.title
-        item.description = record.get("room_description") or item.description
+        item.description = record.get("room_description") or record.get("address") or item.description
         item.estimated_cost = record.get("group_cost")
         item.provider = record.get("provider")
         item.booking_link = None
-        item.image_url = record.get("picture_url")
+        item.image_url = record.get("picture_url") or record.get("photo_url")
     else:
         if item.item_type not in ("activity", "attraction"):
             item.item_type = "activity"

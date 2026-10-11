@@ -21,6 +21,8 @@ class FlightOffer:
     price_total: float
     currency: str
     provider: str
+    booking_link: Optional[str] = None
+    live_quote: bool = True   # False for cached price data (e.g. Travelpayouts): a guide, not a bookable fare
 
 
 class FlightProvider(ABC):

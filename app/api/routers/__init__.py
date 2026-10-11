@@ -11,6 +11,7 @@ from app.api.routers.currency import router as currency_router
 from app.api.routers.discover import router as discover_router
 from app.api.routers.entitlements import router as entitlements_router
 from app.api.routers.flights import router as flights_router
+from app.api.routers.guest import router as guest_router
 from app.api.routers.hotels import router as hotels_router
 from app.api.routers.images import router as images_router
 from app.api.routers.destinations import router as destinations_router
@@ -35,6 +36,7 @@ from app.api.routers.weather import router as weather_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(auth_router)
+api_v1_router.include_router(guest_router)
 api_v1_router.include_router(users_router)
 api_v1_router.include_router(uploads_router)
 api_v1_router.include_router(attachments_router)

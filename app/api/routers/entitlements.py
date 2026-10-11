@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user_or_guest, get_current_user
 from app.db.models.user import User
 from app.db.session import get_db
 from app.modules.entitlements.schemas import EntitlementsResponse
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/entitlements", tags=["Entitlements"])
 
 @router.get("/me", response_model=EntitlementsResponse)
 async def get_my_entitlements(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Resolved feature-flag access for the current user. Precedence: global kill

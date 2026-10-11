@@ -2,6 +2,7 @@
 Scheduled maintenance tasks (Celery beat) — Master Prompt §46, §57, §69, §77.
 
   maintenance.lifecycle      hourly   trial/subscription reminders and expiry
+  guest.cleanup              30 min   delete expired unclaimed guest sessions and everything they own
   payments.reconcile         10 min   verify PENDING payments whose webhook never arrived
   maintenance.retention      daily    delete expired personal/operational records
   analytics.daily_metrics    daily    aggregate yesterday (and the day before) into daily_metrics
@@ -27,12 +28,25 @@ BEAT_SCHEDULE = {
     "retention-daily": {"task": "maintenance.retention", "schedule": crontab(hour=3, minute=15)},
     "daily-metrics": {"task": "analytics.daily_metrics", "schedule": crontab(hour=0, minute=40)},
     "currency-warm": {"task": "cache.warm_currency", "schedule": crontab(hour="*/6", minute=25)},
+    "guest-cleanup": {"task": "guest.cleanup", "schedule": crontab(minute="*/30")},
 }
 celery_app.conf.beat_schedule = BEAT_SCHEDULE
 
 
 def _run(name: str, ttl: int, job) -> Any:
     return asyncio.run(run_exclusive(name, ttl, job))
+
+
+@celery_app.task(name="guest.cleanup", ignore_result=True)
+def guest_cleanup_task() -> Any:
+    """Remove expired, unclaimed guest sessions (and everything they own) and long-spent claimed identities."""
+    async def job():
+        from app.modules.guest.service import GuestService
+
+        async with AsyncSessionLocal() as db:
+            return await GuestService(db).cleanup_expired()
+
+    return _run("guest-cleanup", 900, job)
 
 
 @celery_app.task(name="maintenance.lifecycle", ignore_result=True)

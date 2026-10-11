@@ -36,6 +36,10 @@ class FlightOfferResponse(BaseModel):
     price_total: float
     currency: str
     provider: str
+    booking_link: Optional[str] = None      # affiliate deep link (Travelpayouts), when the provider has one
+    data_status: Optional[str] = None       # CACHED for cached price data, VERIFIED_LIVE for a live quote
+    last_verified_at: Optional[str] = None
+    expires_at: Optional[str] = None
 
 
 class FlightSearchResponse(BaseModel):

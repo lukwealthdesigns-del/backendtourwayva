@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
+import sqlalchemy as sa
 from sqlalchemy import Boolean, DateTime, Enum, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -77,6 +78,12 @@ class User(UUIDPKMixin, TimestampMixin, Base):
     # JWTs are stateless, so revocation works by moving this forward
     # rather than maintaining a token blacklist.
     sessions_invalidated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # --- Guest mode ---
+    # A guest is a real, inactive-for-login user row created for one guest session so every existing service, ownership
+    # check and row-level-security policy works unchanged. It has no password and no token: the only way in is the guest
+    # session header. Excluded from admin lists/counts and broadcasts; removed when the session expires unclaimed.
+    is_guest: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa.false(), nullable=False, index=True)
 
     # --- Onboarding (optional, skippable — travel preferences etc.) ---
     onboarding_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

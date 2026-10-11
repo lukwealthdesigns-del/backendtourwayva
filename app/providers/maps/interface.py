@@ -4,6 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 
 class TravelMode(str, Enum):
@@ -19,6 +20,7 @@ class RouteResult:
     duration_seconds: float
     mode: TravelMode
     provider: str
+    polyline: Optional[str] = None   # Google encoded polyline of the path, when asked for and the provider has one
 
 
 class MapProvider(ABC):
@@ -31,6 +33,7 @@ class MapProvider(ABC):
         destination_lat: float,
         destination_lon: float,
         mode: TravelMode,
+        include_polyline: bool = False,
     ) -> RouteResult:
         """Distance + travel time between two points. Never fabricate
         a route — raise ProviderUnavailableError on failure/misconfig,

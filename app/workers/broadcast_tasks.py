@@ -27,10 +27,12 @@ from app.core.constants import (
     AdminMessageStatus,
     BroadcastSegment,
     BroadcastStatus,
+    NotificationType,
     UserStatus,
 )
 from app.core.logging import get_logger
 from app.db.models.admin import AdminMessage, BroadcastJob
+from app.db.models.notification import Notification, NotificationPreference
 from app.db.models.user import User
 from app.db.session import AsyncSessionLocal
 from app.providers.email.brevo_provider import BrevoEmailProvider
@@ -39,6 +41,11 @@ from app.repositories.monetization_repository import MonetizationRepository
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
+
+
+async def run_broadcast(broadcast_id: uuid.UUID) -> None:
+    """Send a broadcast now, in the caller's event loop (development/tests, or when no worker is available)."""
+    await _send_broadcast_async(broadcast_id)
 
 
 @celery_app.task(name="broadcast.send")
@@ -51,10 +58,10 @@ def send_broadcast_task(broadcast_id: str) -> None:
 
 async def _resolve_segment(db, segment: BroadcastSegment) -> list[User]:
     if segment == BroadcastSegment.INACTIVE:
-        result = await db.execute(select(User).where(User.status != UserStatus.ACTIVE))
+        result = await db.execute(select(User).where(User.status != UserStatus.ACTIVE, User.is_guest.is_(False)))
         return list(result.scalars().all())
 
-    result = await db.execute(select(User).where(User.status == UserStatus.ACTIVE))
+    result = await db.execute(select(User).where(User.status == UserStatus.ACTIVE, User.is_guest.is_(False)))
     active_users = list(result.scalars().all())
 
     if segment == BroadcastSegment.ALL:
@@ -103,6 +110,13 @@ async def _send_broadcast_async(broadcast_id: uuid.UUID) -> None:
         email_provider = BrevoEmailProvider()   # already inside a worker: send directly, do not queue from the queue
         sent_count = 0
 
+        # People who switched in-app notifications off do not get the in-app copy (the email copy is separate).
+        wants_in_app = job.channel in (AdminMessageChannel.IN_APP, AdminMessageChannel.BOTH)
+        opted_out: set[uuid.UUID] = set()
+        if wants_in_app:
+            rows = await db.execute(select(NotificationPreference.user_id).where(NotificationPreference.in_app_enabled.is_(False)))
+            opted_out = set(rows.scalars().all())
+
         for user in recipients:
             status = AdminMessageStatus.SENT
             if job.channel in (AdminMessageChannel.EMAIL, AdminMessageChannel.BOTH):
@@ -122,6 +136,13 @@ async def _send_broadcast_async(broadcast_id: uuid.UUID) -> None:
                     message=job.message, channel=job.channel, status=status,
                 )
             )
+            # The notification is what people actually see in the app (bell and Notifications page), exactly like a
+            # direct admin message. Without it an in-app broadcast would be stored but never shown.
+            if wants_in_app and user.id not in opted_out:
+                db.add(Notification(
+                    user_id=user.id, notification_type=NotificationType.ADMIN_MESSAGE,
+                    title="New message from the Tour-Wayva team", body=job.message,
+                ))
             sent_count += 1
 
         job.status = BroadcastStatus.COMPLETED

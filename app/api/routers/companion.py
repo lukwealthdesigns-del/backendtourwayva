@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, rate_limit, require_feature
+from app.api.dependencies import get_current_user_or_guest, get_current_user, rate_limit, require_feature
 from app.core.constants import FeatureFlag
 from app.core.exceptions import AppError
 from app.db.models.user import User
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/companion", tags=["Companion"])
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_feature(FeatureFlag.COMPANION))])
 async def create_conversation(
     payload: ConversationCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     conversation = await CompanionService(db).create_conversation(user_id=current_user.id, payload=payload)
@@ -45,7 +45,7 @@ async def create_conversation(
 
 @router.get("/conversations", response_model=list[ConversationResponse])
 async def list_conversations(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     conversations = await CompanionService(db).list_conversations(current_user.id)
@@ -55,7 +55,7 @@ async def list_conversations(
 @router.get("/conversations/{conversation_id}/messages", response_model=list[MessageResponse])
 async def list_messages(
     conversation_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     service = CompanionService(db)
@@ -101,7 +101,7 @@ _KEEPALIVE_SECONDS = 15
 async def stream_message(
     conversation_id: uuid.UUID,
     payload: MessageCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
 ):
     """Same turn as `POST .../messages`, but the reply arrives as it is written (Server-Sent Events).
 
@@ -136,7 +136,7 @@ async def stream_message(
                     holder["reply"] = reply.content
                     await queue.put({"type": "done", "message": MessageResponse.model_validate(reply).model_dump(mode="json")})
             except AppError as exc:
-                await queue.put({"type": "error", "error_code": exc.error_code, "message": exc.message})
+                await queue.put({"type": "error", "error_code": exc.error_code, "message": exc.message, "details": exc.details})
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - never leak internals into the stream
@@ -182,7 +182,7 @@ async def send_message(
     conversation_id: uuid.UUID,
     payload: MessageCreateRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Sends a user message and returns the Companion's reply. See

@@ -24,7 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import FREE_TIER_DEFAULT_FLAGS, FeatureFlag
 from app.core.exceptions import FeatureUnavailableError, ForbiddenError
 from app.db.models.monetization import FeatureFlagOverride, FeatureFlagSetting
-from app.modules.entitlements.rules import GLOBALLY_DISABLED, Decision, GlobalFlagState, decide
+from app.db.models.user import User
+from app.modules.entitlements.rules import GLOBALLY_DISABLED, GUEST_ACCOUNT_REQUIRED, Decision, GlobalFlagState, decide, decide_guest
+from app.modules.guest.rules import GUEST_FEATURES
 from app.repositories.monetization_repository import MonetizationRepository
 from app.services.cache_service import CacheService
 
@@ -65,8 +67,14 @@ class EntitlementService:
     # ------------------------------------------------------------------
     # Decisions
     # ------------------------------------------------------------------
+    async def _is_guest(self, user_id: uuid.UUID) -> bool:
+        user = await self.db.get(User, user_id)       # usually already in the session from authentication: no query
+        return bool(user is not None and user.is_guest)
+
     async def decision(self, user_id: uuid.UUID, flag: FeatureFlag) -> Decision:
         state = (await self.global_states()).get(flag.value, GlobalFlagState())
+        if await self._is_guest(user_id):             # guests: kill switches apply, then ONLY the guest feature set
+            return decide_guest(global_state=state, flag_value=flag.value, guest_features=GUEST_FEATURES)
         if state.killed:                                   # nothing else can matter: skip the queries
             return decide(global_state=state, override=None, granted_by_plan=False)
 
@@ -92,10 +100,14 @@ class EntitlementService:
         details = {"required_feature": flag.value, "reason": decision.reason}
         if decision.reason == GLOBALLY_DISABLED:
             raise FeatureUnavailableError("This feature is temporarily unavailable. Please try again later.", details=details)
+        if decision.reason == GUEST_ACCOUNT_REQUIRED:
+            raise ForbiddenError("Create a free account to use this feature.", details=details)
         raise ForbiddenError(f"Your current plan does not include the '{flag.value}' feature.", details=details)
 
     async def resolve_all(self, user_id: uuid.UUID) -> tuple[dict[str, bool], str]:
         states = await self.global_states()
+        if await self._is_guest(user_id):
+            return {f.value: decide_guest(global_state=states.get(f.value, GlobalFlagState()), flag_value=f.value, guest_features=GUEST_FEATURES).allowed for f in FeatureFlag}, "guest"
         granted, source = await self._base_granted_flags(user_id)
         overrides = {o.flag.value: o.is_enabled for o in await self.repo.list_overrides_for_user(user_id)}
         flags = {

@@ -6,7 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, require_feature
+from app.api.dependencies import get_current_user_or_guest, get_current_user, require_feature
 from app.core.constants import FeatureFlag
 from app.db.models.user import User
 from app.db.session import get_db
@@ -110,7 +110,7 @@ async def reject_invitation(
 @router.get("/trips/{trip_id}/members", response_model=list[TripMemberResponse])
 async def list_members(
     trip_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     members = await TripService(db).list_members(trip_id=trip_id, user_id=current_user.id)

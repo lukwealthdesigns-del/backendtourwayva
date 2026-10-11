@@ -62,3 +62,14 @@ def effective_limits(config: PolicyConfig, *, is_premium: bool) -> EffectiveLimi
         tier=tier, growth=config.growth_mode, max_days=clamp(max(max_days, full), full, HARD_MAX_DAYS),
         full_detail_max_days=full, chunk_days=chunk, monthly_limit=max(0, int(monthly)),
     )
+
+
+def guest_limits(config: PolicyConfig, *, max_days: int, generations: int) -> EffectiveLimits:
+    """The limits for a GUEST session. They come from the guest settings and never from growth mode or any paid tier, so
+    a launch-period "growth" switch cannot give anonymous visitors the generous limits."""
+    full = clamp(config.full_detail_max_days, 1, HARD_FULL_DETAIL_MAX_DAYS)
+    chunk = clamp(config.chunk_days, MIN_CHUNK_DAYS, MAX_CHUNK_DAYS)
+    return EffectiveLimits(
+        tier="guest", growth=False, max_days=clamp(max(1, int(max_days)), 1, HARD_MAX_DAYS), full_detail_max_days=full,
+        chunk_days=chunk, monthly_limit=max(1, int(generations)),
+    )

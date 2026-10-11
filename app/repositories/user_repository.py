@@ -75,7 +75,7 @@ class UserRepository:
     ):
         from sqlalchemy import or_
 
-        stmt = select(User)
+        stmt = select(User).where(User.is_guest.is_(False))      # guests are not users to administer
         if query:
             like = f"%{query}%"
             stmt = stmt.where(or_(User.email.ilike(like), User.username.ilike(like), User.first_name.ilike(like)))
@@ -88,7 +88,7 @@ class UserRepository:
     async def count_users(self, *, query: str | None = None, status: str | None = None) -> int:
         from sqlalchemy import func, or_
 
-        stmt = select(func.count()).select_from(User)
+        stmt = select(func.count()).select_from(User).where(User.is_guest.is_(False))
         if query:
             like = f"%{query}%"
             stmt = stmt.where(or_(User.email.ilike(like), User.username.ilike(like), User.first_name.ilike(like)))

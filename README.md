@@ -1774,3 +1774,44 @@ Known limitations of the pieces delivered here:
 - The 196-country localization dataset (`app/core/country_data.py`) is a best-effort single
   currency/language/timezone per country, not an exhaustive statement — many countries have
   multiple official languages or timezones; the most common/capital one is used.
+
+---
+
+## Multi-provider travel layer (Phase 2 of the guest-mode / provider round)
+
+The platform is built around **capabilities, not vendors**. Services never name a vendor: they ask `app/providers/travel/registry.get_resolver()`
+for a capability and receive the configured providers in priority order. A provider is only used when its key is set, so **Amadeus is optional**.
+
+| Capability | Default providers (priority order) | Setting |
+|---|---|---|
+| Hotel discovery (which hotels exist, rating, photo; **no rooms or prices**) | `google_places` | `HOTEL_DISCOVERY_PROVIDERS` |
+| Hotel inventory (live rooms and prices) | `amadeus` (Booking.com / Expedia later) | `HOTEL_INVENTORY_PROVIDERS` |
+| Activities / attractions | `google_places`, `amadeus` | `ACTIVITY_PROVIDERS` |
+| Flight search (cached price data + affiliate links) | `travelpayouts`, `amadeus` | `FLIGHT_PROVIDERS` |
+| Flight status | `aviationstack` | `FLIGHT_STATUS_PROVIDERS` |
+| Routing (+ path polyline) | `google_routes`, `openrouteservice` | `ROUTING_PROVIDERS` |
+
+Keys: `GOOGLE_MAPS_API_KEY` (server key; enable *Places API (New)* and *Routes API*; restrict by IP), `TRAVELPAYOUTS_TOKEN`, `TRAVELPAYOUTS_MARKER`,
+`AVIATIONSTACK_API_KEY` (+ `AVIATIONSTACK_BASE_URL`: the free plan is HTTP-only).
+
+Rules the code enforces:
+* **Google Places is discovery, never inventory.** Its hotels have `kind="discovery"` and `price_total=None`; the planner is told never to price them.
+* Every external object carries `provider`, `provider_reference`, `data_status` (`VERIFIED_LIVE`, `CACHED`, ...), `last_verified_at`, `expires_at`, `source_url`. Cache hits are downgraded to `CACHED`.
+* Travelpayouts prices are **cached search data**, not live quotes (`live_quote=False`, labelled `CACHED`, cannot be re-priced, added to a trip as *unverified*).
+* Google photos are served through `GET /places/photo` with a signed, expiring link so the Google key never reaches a browser.
+* New endpoints: `POST /hotels/discover`, `GET /flights/status`, `GET /places/photo`; `POST /maps/route` accepts `include_polyline`. Companion gains `get_flight_status`.
+
+**Not verified against the live services** (no network or keys where this was built): the Google Places (New) / Routes request shapes, the Travelpayouts `prices_for_dates` response and
+the Aviationstack response were written from the providers' documentation. The parsing is unit-tested on sample payloads (`tests/unit/test_travel_provider_layer.py`); run each provider once with a real key.
+
+---
+
+## Guest mode ("Explore first. Commit later.")
+
+A guest can explore Discover, plan a trip, get an initial itinerary, edit it temporarily and chat with the Companion within limits, without an account.
+
+* **How:** `POST /guest/session` returns an opaque token (shown once; only its SHA-256 is stored). The app sends it as `X-Guest-Session`. A guest is a real `users` row with `is_guest=true` (no password, no JWT), so every ownership check and row-level-security policy applies to guest data unchanged. Guests are excluded from admin lists/counts and broadcasts, never receive email (placeholder `*.invalid` addresses), and are deleted when the session expires unclaimed (`guest.cleanup`, every 30 minutes; cascades remove their trips, conversations and searches).
+* **What a guest can reach** is an explicit allow-list: only endpoints that depend on `get_current_user_or_guest`. A contract test (`tests/unit/test_guest_mode_rules.py`) fails if any other endpoint starts accepting a guest, or an approved one stops. Guest feature set: DISCOVER, PLANNER, COMPANION, HOTELS, ACTIVITIES, WEATHER; admin kill switches still apply, and "open to all" never widens it. Everything else (save/share/invite, PDF, saved places, history, notifications, memory, voice, flights, billing) answers 401/403 and the app offers to create an account.
+* **Limits (all server-side, env-configurable):** `GUEST_COMPANION_MESSAGES` (8; greetings are free), `GUEST_GENERATIONS` (2), `GUEST_MAX_TRIPS` (3), `GUEST_MAX_TRIP_DAYS` (10), `GUEST_SESSION_TTL_HOURS` (48, sliding), `GUEST_SESSIONS_PER_IP_PER_DAY` (20; an abuse signal, not identity), plus per-guest-session rate limits.
+* **Claim:** `POST /guest/claim` (sign-in required, `X-Guest-Session`) moves the guest's trips, versions, notes, costs, memberships, Companion conversations and Discover searches to the account in one transaction under a row lock: all-or-nothing, safe to retry (a repeat returns the same result, nothing duplicated), refused for expired sessions and for another user's session.
+* **Migration:** `0029_guest_mode` (adds `users.is_guest` and `guest_sessions`). Not run against a real database where this was written: run it, then the claim flow, on a staging database first.

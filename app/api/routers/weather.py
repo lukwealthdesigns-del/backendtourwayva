@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.dependencies import get_client_ip, get_current_user, require_feature, rate_limit
+from app.api.dependencies import get_current_user_or_guest, get_client_ip, get_current_user, require_feature, rate_limit
 from app.core.constants import FeatureFlag
 from app.core.exceptions import ValidationAppError
 from app.db.models.user import User
@@ -20,7 +20,7 @@ _locator = ApproximateLocationService()
 async def current_weather(
     latitude: float | None = Query(default=None, ge=-90, le=90),
     longitude: float | None = Query(default=None, ge=-180, le=180),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     client_ip: str | None = Depends(get_client_ip),
 ):
     """
@@ -57,7 +57,7 @@ async def destination_weather(
     latitude: float = Query(..., ge=-90, le=90),
     longitude: float = Query(..., ge=-180, le=180),
     days: int = Query(default=5, ge=1, le=10),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
 ):
     """Forecast for a destination — used by Discover and Planning to
     reason about trip suitability and weather-aware scheduling."""

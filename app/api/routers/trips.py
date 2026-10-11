@@ -14,7 +14,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, require_feature
+from app.api.dependencies import get_current_user_or_guest, get_current_user, require_feature
 from app.modules.currency.budget_policy import ensure_budget_is_realistic
 from app.core.constants import FeatureFlag
 from app.core.exceptions import NotFoundError
@@ -58,7 +58,7 @@ class TripItemWriteResponse(TripItemResponse):
 async def update_trip(
     trip_id: uuid.UUID,
     payload: TripUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Edit a trip's basics (owner/editor): title, origin, travelers, budget always; destination and dates only while the
@@ -74,12 +74,16 @@ async def update_trip(
 @router.post("", response_model=TripResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_feature(FeatureFlag.PLANNER))])
 async def create_trip(
     payload: TripCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Creates the trip, makes the caller its owner, and scaffolds one
     empty TripDay per calendar day in the date range."""
     await ensure_budget_is_realistic(payload.budget_amount, payload.budget_currency)
+    if current_user.is_guest:
+        from app.modules.guest.service import GuestService
+
+        await GuestService(db).enforce_trip_limit(current_user.id)   # guests keep a few temporary trips; accounts keep them all
     service = TripService(db)
     trip = await service.create_trip(owner_id=current_user.id, payload=payload)
     membership = await service.repo.get_membership(trip.id, current_user.id)
@@ -92,7 +96,7 @@ async def list_my_trips(
         default="all",
         description="Trips-page tab. `all` = every trip you have not archived; `archived` = only the ones you did.",
     ),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Your trips, newest start date first. Each carries the backend-computed `display_status`,
@@ -105,7 +109,7 @@ async def list_my_trips(
 @router.get("/{trip_id}", response_model=TripResponse)
 async def get_trip(
     trip_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     service = TripService(db)
@@ -139,7 +143,7 @@ async def unarchive_trip(
 @router.get("/{trip_id}/itinerary", response_model=list[TripDayResponse])
 async def get_itinerary(
     trip_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Full structured itinerary: every day, with its items, in order."""
@@ -154,7 +158,7 @@ async def get_itinerary(
 async def add_trip_item(
     day_id: uuid.UUID,
     payload: TripItemCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Adds an item to a trip day. Requires editor (or owner) role.
@@ -171,7 +175,7 @@ async def add_trip_item(
 async def update_trip_item(
     item_id: uuid.UUID,
     payload: TripItemUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     itinerary_service = ItineraryService(db)
@@ -226,7 +230,7 @@ async def add_flight(
 async def replace_hotel(
     item_id: uuid.UUID,
     payload: ReplaceHotelRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Deterministically swaps a HOTEL item for a specific, freshly re-priced hotel offer
@@ -254,7 +258,7 @@ async def replace_hotel(
 @router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_feature(FeatureFlag.PLANNER))])
 async def delete_trip_item(
     item_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     itinerary_service = ItineraryService(db)

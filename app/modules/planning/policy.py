@@ -13,7 +13,8 @@ from app.core.constants import FeatureFlag
 from app.db.models.analytics import AIUsageRecord, AnalyticsEvent
 from app.db.models.planning_policy import PlanningPolicy
 from app.modules.entitlements.service import EntitlementService
-from app.modules.planning.policy_rules import EffectiveLimits, PolicyConfig, effective_limits
+from app.db.models.user import User
+from app.modules.planning.policy_rules import EffectiveLimits, PolicyConfig, effective_limits, guest_limits
 
 GENERATION_EVENT = "itinerary_generation_completed"
 
@@ -64,6 +65,11 @@ class PlanningPolicyService:
 
     async def limits_for(self, user_id: uuid.UUID) -> EffectiveLimits:
         config = await self.get_config()
+        user = await self.db.get(User, user_id)
+        if user is not None and user.is_guest:
+            from app.core.config import settings
+
+            return guest_limits(config, max_days=settings.GUEST_MAX_TRIP_DAYS, generations=settings.GUEST_GENERATIONS)
         is_premium = False if config.growth_mode else await EntitlementService(self.db).has_feature(user_id, FeatureFlag.PREMIUM_AI)
         return effective_limits(config, is_premium=is_premium)
 

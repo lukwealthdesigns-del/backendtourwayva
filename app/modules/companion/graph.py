@@ -74,6 +74,7 @@ class CompanionState(TypedDict, total=False):
     model_used: Optional[str]
     usage: list[dict[str, Any]]
     tools_used: list[str]
+    has_trip: bool                         # the conversation is about a trip (default True when absent)
 
 
 def _usage_entry(response: Any, purpose: str) -> dict[str, Any]:
@@ -92,6 +93,10 @@ def make_nodes(ports: CompanionPorts) -> dict[str, Callable[[dict[str, Any]], Aw
         by_rules = classify_by_rules(message)
         if by_rules is not None:
             return {"intent": by_rules, "intent_source": "rules"}
+        if state.get("has_trip") is False:
+            # No trip to edit or query and no rule matched: an ordinary travel question. Skipping the classification
+            # model call saves a full round trip on every such message; the read-only travel tools are still offered.
+            return {"intent": Intent.GENERAL_TRAVEL, "intent_source": "default"}
         try:
             response = await ports.llm(
                 [

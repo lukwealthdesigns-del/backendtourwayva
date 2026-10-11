@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, rate_limit, require_feature
+from app.api.dependencies import get_current_user_or_guest, get_current_user, rate_limit, require_feature
 from app.core.constants import FeatureFlag
 from app.db.models.user import User
 from app.db.session import get_db
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/discover", tags=["Discover"])
 )
 async def search_destinations(
     payload: DiscoverSearchRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """AI-proposed, geocoding-verified destination recommendations

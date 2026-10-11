@@ -27,6 +27,8 @@ USER_OVERRIDE_REVOKED = "user_override_revoked"
 OPEN_TO_ALL = "open_to_all"
 IN_PLAN = "plan"
 NOT_IN_PLAN = "not_in_plan"
+GUEST_ACCOUNT_REQUIRED = "guest_account_required"
+GUEST_ALLOWED = "guest"
 
 
 @dataclass(frozen=True)
@@ -49,3 +51,13 @@ def decide(*, global_state: GlobalFlagState, override: Optional[bool], granted_b
     if global_state.open_to_all:
         return Decision(True, OPEN_TO_ALL)
     return Decision(granted_by_plan, IN_PLAN if granted_by_plan else NOT_IN_PLAN)
+
+
+def decide_guest(*, global_state: GlobalFlagState, flag_value: str, guest_features: frozenset) -> Decision:
+    """A guest's access: the admin kill switch still applies, then ONLY the guest feature set. Per-user overrides and
+    "open to all" never widen what a guest can use: anything beyond it needs an account."""
+    if global_state.killed:
+        return Decision(False, GLOBALLY_DISABLED)
+    if flag_value in guest_features:
+        return Decision(True, GUEST_ALLOWED)
+    return Decision(False, GUEST_ACCOUNT_REQUIRED)

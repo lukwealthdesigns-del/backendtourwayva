@@ -70,15 +70,17 @@ class HotelReplacementService:
             raise ValidationAppError("That hotel has no available offer for these dates.")
 
         offer = HotelOffer(
-            hotel_id=offer_response.hotel_id, hotel_name=offer_response.hotel_name,
+            hotel_id=offer_response.hotel_id, hotel_name=offer_response.hotel_name, offer_id=offer_response.offer_id,
+            check_in=offer_response.check_in, check_out=offer_response.check_out,
             room_description=offer_response.room_description, price_total=offer_response.price_total,
             currency=offer_response.currency, provider=offer_response.provider,
-            latitude=offer_response.latitude, longitude=offer_response.longitude,
+            latitude=offer_response.latitude, longitude=offer_response.longitude, kind=offer_response.kind,
         )
-        trip_currency = (trip.budget_currency or item.currency or offer.currency).upper()
+        priced = offer.price_total is not None and bool(offer.currency)
+        trip_currency = (trip.budget_currency or item.currency or offer.currency or "USD").upper()
 
         rate: Optional[float] = None
-        if offer.currency.upper() != trip_currency:
+        if priced and offer.currency.upper() != trip_currency:
             try:
                 rate = (await self.currency.get_rate(offer.currency, trip_currency)).rate
             except Exception:  # noqa: BLE001 - price is left unknown rather than guessed
@@ -97,11 +99,12 @@ class HotelReplacementService:
         item.title = plan.title
         item.location_name = plan.title
         item.description = plan.description
-        item.estimated_cost = plan.estimated_cost if rate is not None or offer.currency.upper() == trip_currency else None
-        item.currency = trip_currency if item.estimated_cost is not None else offer.currency
+        item.estimated_cost = plan.estimated_cost if priced and (rate is not None or offer.currency.upper() == trip_currency) else None
+        item.currency = trip_currency if item.estimated_cost is not None else (offer.currency or trip_currency)
         item.provider = plan.provider
         item.external_id = plan.external_id
-        item.source = "provider"
+        # A discovery hotel is a real place with no verified price: it is not a provider-priced offer.
+        item.source = "provider" if priced else "estimated"
         item.booking_link = None
         item.image_url = plan.image_url
         if plan.latitude is not None and plan.longitude is not None:
