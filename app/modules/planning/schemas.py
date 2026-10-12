@@ -106,3 +106,23 @@ class GenerationJobResponse(BaseModel):
     result: Optional[dict[str, Any]] = None
     error: Optional[JobError] = None
     progress: Optional[JobProgress] = None
+
+
+class RegenerateDayRequest(BaseModel):
+    """What to change about one day. The note is optional ("more relaxed", "add a museum")."""
+
+    note: Optional[str] = Field(default=None, max_length=240)
+
+
+class RegenerateDayResponse(BaseModel):
+    """A PROPOSAL for one day. `changed=false` means nothing was proposed (see `message`). Otherwise confirm it with
+    POST /companion/changes/{change_id}/confirm or discard it with .../reject; nothing changes until then."""
+
+    changed: bool
+    change_id: Optional[uuid.UUID] = None
+    summary: Optional[str] = None
+    estimated_cost_before: Optional[float] = None
+    estimated_cost_after: Optional[float] = None
+    currency: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+    message: Optional[str] = None

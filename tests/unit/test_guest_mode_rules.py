@@ -92,6 +92,7 @@ GUEST_ENDPOINTS = {
     ("companion", "POST", "/conversations"), ("companion", "GET", "/conversations"),
     ("companion", "GET", "/conversations/{conversation_id}/messages"), ("companion", "POST", "/conversations/{conversation_id}/messages"),
     ("companion", "POST", "/conversations/{conversation_id}/messages/stream"),
+    ("companion", "POST", "/changes/{change_id}/confirm"), ("companion", "POST", "/changes/{change_id}/reject"),
     ("collaboration", "GET", "/trips/{trip_id}/members"),
     ("trip_extras", "POST", "/{trip_id}/routes"), ("trip_extras", "GET", "/{trip_id}/routes"),
 }
@@ -120,7 +121,7 @@ def test_only_the_intended_endpoints_accept_a_guest():
 
 
 @pytest.mark.parametrize("name", ["payments", "subscriptions", "users", "auth", "memory", "notifications", "saved_places", "attachments",
-                                  "uploads", "admin", "flights", "travel_history", "trials", "rag", "places"])
+                                  "uploads", "admin", "flights", "travel_history", "trials", "rag", "places", "sharing", "moderation"])
 def test_account_only_routers_never_accept_a_guest(name):
     text = (ROUTERS / f"{name}.py").read_text(encoding="utf-8")
     assert "get_current_user_or_guest" not in text, f"{name} must stay account-only"

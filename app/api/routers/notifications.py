@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, rate_limit
 from app.db.models.user import User
 from app.db.session import get_db
 from app.modules.notifications.schemas import (
@@ -17,6 +18,24 @@ from app.modules.notifications.schemas import (
 from app.modules.notifications.service import NotificationService
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
+
+
+@router.get(
+    "/stream", dependencies=[Depends(rate_limit(bucket="notifications:stream", max_requests=30, window_seconds=300, per="user"))],
+)
+async def notification_stream(request: Request, current_user: User = Depends(get_current_user)):
+    """Live push (Server-Sent Events) for the signed-in person's open app: admin messages and broadcasts arrive at once. The
+    stream ends after about ten minutes so the app reconnects with a fresh token; it is a nudge on top of GET /notifications, which
+    stays the source of truth."""
+    from app.services.push_service import listen
+
+    async def frames():
+        async for frame in listen(current_user.id):
+            if await request.is_disconnected():
+                break
+            yield frame
+
+    return StreamingResponse(frames(), media_type="text/event-stream", headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
 
 @router.get("", response_model=list[NotificationResponse])

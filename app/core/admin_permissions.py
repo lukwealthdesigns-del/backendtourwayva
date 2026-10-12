@@ -50,6 +50,7 @@ PERMISSION_CATALOG: tuple[PermissionDef, ...] = (
     PermissionDef("audit:view", "View the admin audit log"),
     PermissionDef("analytics:view", "View analytics and AI cost dashboards"),
     PermissionDef("content:manage", "Manage shared travel content (places, knowledge base)"),
+    PermissionDef("moderation:manage", "Review reports about shared trips and turn shared links off"),
     PermissionDef("plans:manage", "Manage plans, trials and per-user feature overrides"),
     PermissionDef("payments:view", "View payments and revenue"),
     PermissionDef("payments:refund", "Issue refunds for verified payments"),
@@ -70,7 +71,7 @@ SYSTEM_ROLES: tuple[SystemRoleDef, ...] = (
     SystemRoleDef(AdminRole.SUPER_ADMIN.value, "Full access, including managing admins and roles", is_super=True),
     SystemRoleDef(AdminRole.ADMIN.value, "General administrator", frozenset({
         "users:view", "users:block", "users:delete", "users:manage_sessions", "messaging:send", "broadcast:send",
-        "audit:view", "analytics:view", "content:manage", "plans:manage", "payments:view", "flags:manage",
+        "audit:view", "analytics:view", "content:manage", "moderation:manage", "plans:manage", "payments:view", "flags:manage",
     })),
     SystemRoleDef(AdminRole.SUPPORT_ADMIN.value, "Customer support",
                   frozenset({"users:view", "users:block", "users:manage_sessions", "messaging:send"})),
@@ -79,7 +80,7 @@ SYSTEM_ROLES: tuple[SystemRoleDef, ...] = (
                   frozenset({"users:view", "analytics:view", "plans:manage", "payments:view", "payments:refund"})),
     SystemRoleDef(AdminRole.ANALYTICS_ADMIN.value, "Analytics", frozenset({"users:view", "analytics:view", "audit:view"})),
     SystemRoleDef(AdminRole.MODERATION_ADMIN.value, "Moderation",
-                  frozenset({"users:view", "users:block", "users:manage_sessions", "audit:view"})),
+                  frozenset({"users:view", "users:block", "users:manage_sessions", "audit:view", "moderation:manage"})),
 )
 SYSTEM_ROLE_NAMES: frozenset[str] = frozenset(r.name for r in SYSTEM_ROLES)
 SUPER_ADMIN_ROLE_NAME = AdminRole.SUPER_ADMIN.value

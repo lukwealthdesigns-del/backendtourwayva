@@ -109,6 +109,7 @@ async def _send_broadcast_async(broadcast_id: uuid.UUID) -> None:
 
         email_provider = BrevoEmailProvider()   # already inside a worker: send directly, do not queue from the queue
         sent_count = 0
+        pushed_ids: list = []
 
         # People who switched in-app notifications off do not get the in-app copy (the email copy is separate).
         wants_in_app = job.channel in (AdminMessageChannel.IN_APP, AdminMessageChannel.BOTH)
@@ -143,9 +144,15 @@ async def _send_broadcast_async(broadcast_id: uuid.UUID) -> None:
                     user_id=user.id, notification_type=NotificationType.ADMIN_MESSAGE,
                     title="New message from the Tour-Wayva team", body=job.message,
                 ))
+                pushed_ids.append(user.id)
             sent_count += 1
 
         job.status = BroadcastStatus.COMPLETED
         job.recipient_count = sent_count
         await db.commit()
+        if pushed_ids:
+            # People with the app open see it instantly; everyone else finds it in their notifications.
+            from app.services.push_service import publish_many
+
+            await publish_many(pushed_ids, {"kind": "notification", "type": "admin_message", "title": "New message from the Tour-Wayva team", "body": job.message, "link": None})
         logger.info("broadcast_completed", broadcast_id=str(broadcast_id), recipient_count=sent_count)

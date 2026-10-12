@@ -29,13 +29,33 @@ from app.modules.planning.policy_schemas import EffectivePlanningLimits
 from app.modules.planning.schemas import (
     GenerateItineraryRequest,
     GenerationJobResponse,
+    RegenerateDayRequest,
+    RegenerateDayResponse,
     TripPreferencesPayload,
     TripPreferencesResponse,
 )
+from app.modules.planning.day_regeneration import DayRegenerationService
 from app.modules.planning.service import PlanningService
 
 router = APIRouter(prefix="/trips", tags=["Planning"])
 limits_router = APIRouter(prefix="/planning", tags=["Planning"])
+
+
+@router.post(
+    "/{trip_id}/days/{day_id}/regenerate", response_model=RegenerateDayResponse,
+    dependencies=[Depends(require_feature(FeatureFlag.PLANNER)), Depends(rate_limit(bucket="planning:regenerate-day", max_requests=10, window_seconds=300, per="user"))],
+)
+async def regenerate_day(
+    trip_id: uuid.UUID,
+    day_id: uuid.UUID,
+    payload: RegenerateDayRequest,
+    current_user: User = Depends(get_current_user_or_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Propose a fresh plan for ONE day (owner/editor). Only that day may change; the proposal is verified like any generated
+    plan and takes effect only when the person confirms it."""
+    result = await DayRegenerationService(db).propose(trip_id=trip_id, day_id=day_id, user=current_user, note=payload.note)
+    return RegenerateDayResponse(**{k: result.get(k) for k in ("changed", "change_id", "summary", "estimated_cost_before", "estimated_cost_after", "currency", "message")}, warnings=result.get("warnings") or [])
 
 
 @limits_router.get("/limits", response_model=EffectivePlanningLimits)

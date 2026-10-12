@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.knowledge import KnowledgeChunk, KnowledgeDocument
@@ -23,6 +23,21 @@ class KnowledgeRepository:
     async def get_document(self, document_id: uuid.UUID) -> Optional[KnowledgeDocument]:
         result = await self.db.execute(select(KnowledgeDocument).where(KnowledgeDocument.id == document_id))
         return result.scalar_one_or_none()
+
+    async def list_documents(self, *, query: Optional[str], status: Optional[str], limit: int, offset: int) -> tuple[list[KnowledgeDocument], int]:
+        stmt, count = select(KnowledgeDocument), select(func.count()).select_from(KnowledgeDocument)
+        if query:
+            like = f"%{query.strip()[:100]}%"
+            stmt, count = stmt.where(KnowledgeDocument.title.ilike(like)), count.where(KnowledgeDocument.title.ilike(like))
+        if status:
+            stmt, count = stmt.where(KnowledgeDocument.status == status), count.where(KnowledgeDocument.status == status)
+        total = (await self.db.execute(count)).scalar_one()
+        rows = (await self.db.execute(stmt.order_by(KnowledgeDocument.created_at.desc()).limit(limit).offset(offset))).scalars().all()
+        return list(rows), int(total)
+
+    async def delete_document(self, document: KnowledgeDocument) -> None:
+        await self.db.delete(document)          # its chunks go with it (ON DELETE CASCADE)
+        await self.db.flush()
 
     async def get_document_for_update(self, document_id: uuid.UUID) -> Optional[KnowledgeDocument]:
         result = await self.db.execute(

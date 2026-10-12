@@ -72,6 +72,14 @@ class NotificationService:
                     pass  # notification email is best-effort; the in-app row is the source of truth
 
         await self.db.commit()
+        if notification is not None:
+            # Tell the person's open app right away (best effort: the committed row is the source of truth).
+            from app.services.push_service import publish
+
+            await publish(user_id, {
+                "kind": "notification", "id": str(notification.id), "type": getattr(notification_type, "value", str(notification_type)),
+                "title": title, "body": body, "link": link,
+            })
         return notification
 
     async def list_my_notifications(self, user_id: uuid.UUID, *, unread_only: bool = False):

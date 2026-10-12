@@ -28,6 +28,7 @@ from app.db.models.collaboration import PendingChangeVote, TripComment, TripInvi
 from app.db.models.conversation import Conversation, Message  # noqa: F401
 from app.db.models.discover import DiscoveryResult, DiscoverySearch  # noqa: F401
 from app.db.models.guest import GuestSession  # noqa: F401
+from app.db.models.share import ContentReport, TripShareLink  # noqa: F401
 from app.db.models.knowledge import KnowledgeChunk, KnowledgeDocument  # noqa: F401
 from app.db.models.memory import UserMemory  # noqa: F401
 from app.db.models.monetization import (  # noqa: F401

@@ -215,7 +215,7 @@ async def list_pending_changes(
 @router.post("/changes/{change_id}/confirm", response_model=ConfirmChangeResult, dependencies=[Depends(require_feature(FeatureFlag.PLANNER))])
 async def confirm_change(
     change_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Applies an AI-proposed change. Requires editor/owner access to
@@ -230,7 +230,7 @@ async def confirm_change(
 @router.post("/changes/{change_id}/reject", response_model=PendingChangeResponse)
 async def reject_change(
     change_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_or_guest),
     db: AsyncSession = Depends(get_db),
 ):
     from app.modules.companion.change_service import PendingChangeService

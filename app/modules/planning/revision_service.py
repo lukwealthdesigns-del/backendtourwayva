@@ -27,6 +27,7 @@ from app.modules.entitlements.service import EntitlementService
 from app.modules.planning.deps import build_ports
 from app.modules.planning.graph import PlanningState
 from app.modules.planning.llm_io import plan_to_dict
+from app.modules.planning.day_scope import days_touched
 from app.modules.planning.revision import (
     MAX_INSTRUCTION_CHARS,
     build_revision_spec,
@@ -59,7 +60,8 @@ class RevisionService:
         self.pending_repo = PendingChangeRepository(db)
 
     async def propose(
-        self, *, conversation_id: uuid.UUID, trip_id: uuid.UUID, user: User, instruction: str
+        self, *, conversation_id: uuid.UUID, trip_id: uuid.UUID, user: User, instruction: str,
+        only_day: Optional[int] = None,
     ) -> dict[str, Any]:
         instruction = clean_instruction(instruction)
         trip = await TripService(self.db).get_trip_authorized(trip_id=trip_id, user_id=user.id)
@@ -77,6 +79,9 @@ class RevisionService:
             diff = diff_plans(base, plan)
             if diff.is_empty:
                 return {"changed": False, "message": "That request would not change the itinerary."}
+            if only_day is not None and days_touched(diff) - {only_day}:
+                # The model strayed beyond the one day it was asked about. Nothing is stored: the other days stay untouched.
+                return {"changed": False, "message": "The suggestion also changed other days, so it was discarded. Please try again."}
             summary = summarize_diff(diff, instruction)
             change = await self.pending_repo.create(PendingItineraryChange(
                 conversation_id=conversation_id, trip_id=trip_id, action=PendingChangeAction.REVISE_TRIP,

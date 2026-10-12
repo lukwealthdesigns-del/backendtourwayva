@@ -35,3 +35,24 @@ class KnowledgeSearchResult(BaseModel):
 class KnowledgeSearchResponse(BaseModel):
     results: list[KnowledgeSearchResult]
     count: int
+
+
+class KnowledgeDocumentSummary(BaseModel):
+    """One document in the admin knowledge list (the full text is not sent: only a short preview)."""
+
+    document_id: uuid.UUID
+    title: str
+    source: str
+    status: str
+    chunk_count: int = 0
+    error: Optional[str] = None
+    content_chars: int = 0
+    preview: str = ""
+    created_at: datetime
+
+
+class KnowledgeDocumentList(BaseModel):
+    items: list[KnowledgeDocumentSummary]
+    total: int
+    limit: int
+    offset: int
