@@ -328,6 +328,7 @@ TTL_CURRENCY_SECONDS = 60 * 60              # short/medium TTL (1 hour)
 TTL_WEATHER_CURRENT_SECONDS = 60 * 15       # short TTL (15 minutes)
 TTL_WEATHER_FORECAST_SECONDS = 60 * 60 * 3  # short TTL (3 hours)
 TTL_IMAGE_SECONDS = 60 * 60 * 24 * 60       # images rarely change: long TTL (60 days)
+TTL_IMAGE_MISS_SECONDS = 60 * 60 * 12       # "no image for this name" is remembered for 12 hours, so the same miss is not searched again and again
 TTL_ROUTE_SECONDS = 60 * 60 * 24 * 7         # road networks are stable: long/medium TTL (7 days)
 TTL_HOTEL_SEARCH_SECONDS = 60 * 5             # very short TTL (5 min) — availability/prices change fast
 TTL_FLIGHT_SEARCH_SECONDS = 60 * 3            # very short TTL (3 min) — flight prices move fastest

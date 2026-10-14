@@ -15,6 +15,14 @@ class GuestSessionCreate(BaseModel):
     country: Optional[str] = Field(default=None, min_length=2, max_length=2)
 
 
+class GuestPreferencesUpdate(BaseModel):
+    """A guest's language, currency and country (all optional; only what is sent changes)."""
+
+    language: Optional[str] = Field(default=None, min_length=2, max_length=10)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
+    country: Optional[str] = Field(default=None, min_length=2, max_length=2)
+
+
 class GuestLimits(BaseModel):
     companion_messages: int
     generations: int

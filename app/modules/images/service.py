@@ -16,8 +16,9 @@ from typing import Optional
 
 from app.core.exceptions import NotFoundError
 from app.modules.images.schemas import ImageResponse
+from app.modules.images.query import image_query_candidates
 from app.providers.images.unsplash_provider import UnsplashProvider
-from app.services.cache_service import TTL_IMAGE_SECONDS, CacheService, image_cache_key
+from app.services.cache_service import TTL_IMAGE_MISS_SECONDS, TTL_IMAGE_SECONDS, CacheService, image_cache_key
 
 _provider = UnsplashProvider()
 
@@ -28,10 +29,17 @@ class ImageService:
 
         cached = await CacheService.get_json(cache_key)
         if cached is not None:
+            if cached.get("miss"):
+                raise NotFoundError(f"No image found for '{entity}'.")      # a remembered miss: no provider call
             return ImageResponse(**{**cached, "source": "cache"})
 
-        result = await _provider.search(f"{entity} {locale}" if locale != "en" else entity)
+        result = None
+        for query in image_query_candidates(entity) or [entity]:
+            result = await _provider.search(f"{query} {locale}" if locale != "en" else query)
+            if result is not None:
+                break
         if result is None:
+            await CacheService.set_json(cache_key, {"miss": True}, TTL_IMAGE_MISS_SECONDS)
             raise NotFoundError(f"No image found for '{entity}'.")
 
         response = ImageResponse(

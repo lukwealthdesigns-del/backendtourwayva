@@ -12,6 +12,7 @@ import sys
 import structlog
 
 from app.core.config import settings
+from app.core.redaction import redact_text
 
 _SENSITIVE_KEYS = {
     "password",
@@ -34,12 +35,29 @@ def _redact_sensitive(_, __, event_dict):
     return event_dict
 
 
+class RedactSecretsFilter(logging.Filter):
+    """httpx logs every outgoing request line at INFO, URL and query string included, and several providers authenticate with
+    `?key=...`. This scrubs credentials from EVERY standard-library log record (httpx, uvicorn, libraries) before it is printed."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001 - a malformed record must never break logging
+            return True
+        scrubbed = redact_text(message)
+        if scrubbed != message:
+            record.msg, record.args = scrubbed, ()
+        return True
+
+
 def configure_logging() -> None:
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=logging.DEBUG if settings.DEBUG else logging.INFO,
     )
+    for handler in logging.getLogger().handlers:      # on the handlers, so records from every logger pass through it
+        handler.addFilter(RedactSecretsFilter())
 
     structlog.configure(
         processors=[

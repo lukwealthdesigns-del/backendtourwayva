@@ -1826,3 +1826,14 @@ A guest can explore Discover, plan a trip, get an initial itinerary, edit it tem
 * **Regenerate one day:** `POST /trips/{trip_id}/days/{day_id}/regenerate` (owner/editor, allowed for guests, 10 per 5 minutes). It asks the existing revision workflow for a replacement of that day only; if the model changes any other day the proposal is discarded. The result is a PROPOSAL: confirm with `POST /companion/changes/{id}/confirm` or discard with `.../reject`. A guest's regeneration is charged against the guest generation allowance. Proposals live in a per-trip conversation titled "Itinerary changes".
 * **Live push:** `GET /notifications/stream` (Server-Sent Events over Redis pub/sub, `app/services/push_service.py`). `NotificationService.notify` and broadcasts publish after the row is committed; a push is a best-effort nudge, never the source of truth (if Redis is down people see the notification on their next refresh). Streams close after ~10 minutes so the app reconnects with a fresh token.
 * **Migration:** `0030_share_links_and_reports` (tables `trip_share_links`, `content_reports`). Not run against a real database where this was written.
+
+---
+
+## Round 4, phase 1: reliability fixes found in the logs
+
+* **Secrets never reach logs.** `RedactSecretsFilter` (app/core/logging.py) scrubs `key=`, `access_key=`, `appid=`, tokens and bearer values from EVERY standard-library log record, including httpx's "HTTP Request: GET https://...?key=..." lines. If keys were ever printed in a shared log, **rotate them** (WeatherAPI, OpenCage).
+* **Overpass is no longer hammered.** Opening-hours lookups share one query per 0.001-degree map cell, cache the answer (including "nothing here"), merge identical simultaneous requests, allow at most two in flight, and pause after a 429/503/504 (honouring `Retry-After`). For real traffic set `OVERPASS_API_URL` to your own instance.
+* **Impossible routes are answered as "no route".** `POST /maps/route` checks coordinates and the straight-line distance first (driving > 4,000 km, walking > 60 km, cycling > 400 km) and returns 404 instead of calling a provider that will refuse; OpenRouteService's "route too long / no route" errors (2004, 2009, 2010) map to the same 404 instead of a 503. The app shows the direct distance (a flight) in that case.
+* **Image search** tries tidy variants of the name (duplicated place names collapsed; the venue name is always kept, never replaced by a generic city photo) and remembers a miss for 12 hours.
+* **Guests can change language, currency and country** with `PATCH /guest/session` (no account endpoint).
+* `requirements.txt` keeps `chardet<6` (the `RequestsDependencyWarning`): run `pip install "chardet<6"` or `pip uninstall chardet`.

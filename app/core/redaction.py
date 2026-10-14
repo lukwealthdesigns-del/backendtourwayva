@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 _SECRET_QUERY_PARAM = re.compile(
-    r"(?i)\b(api[_-]?key|apikey|key|access[_-]?token|token|secret|client[_-]?secret|password|sig|signature)=([^&\s'\"<>]+)"
+    r"(?i)\b(api[_-]?key|apikey|key|access[_-]?key|access[_-]?token|token|secret|client[_-]?secret|password|sig|signature|app[_-]?id|appid)=([^&\s'\"<>]+)"
 )
 _BEARER = re.compile(r"(?i)\b(bearer|basic|client-id)\s+[A-Za-z0-9._~+/=-]{8,}")
 _LONG_TOKEN = re.compile(r"\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]{8,}\b")
@@ -23,3 +23,11 @@ def redact_secrets(text: object, *, max_length: int = 300) -> str:
     value = _BEARER.sub(lambda m: f"{m.group(1)} ***", value)
     value = _LONG_TOKEN.sub(lambda m: f"{m.group(1)}_{m.group(2)}_***", value)
     return value if len(value) <= max_length else value[: max_length - 1] + "…"
+
+
+def redact_text(text: object) -> str:
+    """Like redact_secrets but never truncates: for whole log lines (e.g. httpx's "HTTP Request: GET https://...?key=...")."""
+    value = str(text)
+    value = _SECRET_QUERY_PARAM.sub(lambda m: f"{m.group(1)}=***", value)
+    value = _BEARER.sub(lambda m: f"{m.group(1)} ***", value)
+    return _LONG_TOKEN.sub(lambda m: f"{m.group(1)}_{m.group(2)}_***", value)

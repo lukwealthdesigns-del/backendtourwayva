@@ -110,6 +110,19 @@ class GuestService:
             await self.db.commit()                       # before the request sets its row-level-security user
         return session, user
 
+    async def update_preferences(self, *, token: Optional[str], language: Optional[str], currency: Optional[str], country: Optional[str]) -> GuestSessionResponse:
+        """A guest's language, currency and country live on their guest user, so replies and examples follow them. No account is needed
+        (and no account endpoint is touched): this is the guest-session version of 'change my language'."""
+        session, user = await self.authenticate(token)
+        if language:
+            user.language = language[:10]
+        if currency and len(currency) == 3 and currency.isalpha():
+            user.currency = currency.upper()
+        if country and len(country) == 2 and country.isalpha():
+            user.country = country.upper()
+        await self.db.commit()
+        return await self.status(session)
+
     async def usage(self, session: GuestSession) -> GuestUsage:
         trips = (await self.db.execute(select(func.count()).select_from(Trip).where(Trip.owner_id == session.guest_user_id))).scalar_one()
         from app.modules.planning.policy import PlanningPolicyService

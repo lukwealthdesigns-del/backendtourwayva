@@ -10,7 +10,7 @@ from app.api.dependencies import get_client_ip, get_current_user, rate_limit
 from app.db.models.user import User
 from app.db.session import get_db
 from app.modules.guest.rules import GUEST_SESSION_HEADER
-from app.modules.guest.schemas import ClaimResponse, GuestSessionCreate, GuestSessionResponse
+from app.modules.guest.schemas import ClaimResponse, GuestPreferencesUpdate, GuestSessionCreate, GuestSessionResponse
 from app.modules.guest.service import GuestService
 
 router = APIRouter(prefix="/guest", tags=["Guest"])
@@ -34,6 +34,14 @@ async def guest_session_status(request: Request, db: AsyncSession = Depends(get_
     service = GuestService(db)
     session, _user = await service.authenticate(request.headers.get(GUEST_SESSION_HEADER))
     return await service.status(session)
+
+
+@router.patch("/session", response_model=GuestSessionResponse)
+async def update_guest_preferences(payload: GuestPreferencesUpdate, request: Request, db: AsyncSession = Depends(get_db)):
+    """Change the guest's language, currency or country. Guests have no profile to PATCH: this is theirs."""
+    return await GuestService(db).update_preferences(
+        token=request.headers.get(GUEST_SESSION_HEADER), language=payload.language, currency=payload.currency, country=payload.country,
+    )
 
 
 @router.post(

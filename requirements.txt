@@ -1,3 +1,5 @@
+# requests warns when an unsupported chardet is installed (chardet 6+); charset-normalizer is what requests uses. Keep chardet below 6.
+chardet<6
 # --- Web framework ---
 fastapi==0.115.0
 uvicorn[standard]==0.30.6

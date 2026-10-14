@@ -24,6 +24,7 @@ from app.core.resilience import CircuitOpenError
 from app.providers.http_resilience import resilient_request, safe_error_text
 from app.core.exceptions import NotFoundError, ProviderUnavailableError, ValidationAppError
 from app.core.logging import get_logger
+from app.modules.maps.limits import ORS_NO_ROUTE_CODES
 from app.providers.maps.interface import MapProvider, RouteResult, TravelMode
 
 logger = get_logger(__name__)
@@ -35,6 +36,13 @@ _ORS_PROFILE = {
     TravelMode.DRIVING: "driving-car",
     TravelMode.CYCLING: "cycling-regular",
 }
+
+
+def _ors_error_code(exc: "httpx.HTTPStatusError"):
+    try:
+        return int(exc.response.json()["error"]["code"])
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 class OpenRouteServiceProvider(MapProvider):
@@ -68,6 +76,9 @@ class OpenRouteServiceProvider(MapProvider):
         try:
             data = await resilient_request("openrouteservice", attempt)
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 400 and _ors_error_code(exc) in ORS_NO_ROUTE_CODES:
+                # The provider says the route cannot exist (too long, or no road nearby): that is an answer, not an outage.
+                raise NotFoundError("No route could be found between these locations.") from exc
             logger.error("ors_http_error", status=exc.response.status_code, body=safe_error_text(exc))
             raise ProviderUnavailableError("Route calculation failed. Please try again.") from exc
         except CircuitOpenError:
