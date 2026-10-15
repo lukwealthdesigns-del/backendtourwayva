@@ -218,7 +218,7 @@ class Settings(BaseSettings):
     # Cost-aware routing (Master Prompt §97): cheap/fast model for classification,
     # summarization and memory extraction; strong model for itinerary planning.
     # Unset => the primary model is used for that tier.
-    AI_FAST_MODEL: Optional[str] = None
+    AI_FAST_MODEL: Optional[str] = "gpt-4.1-mini"   # quick chat, lookups, classification (set empty to use the primary model for everything)
     AI_STRONG_MODEL: Optional[str] = None
     AI_REQUEST_TIMEOUT_SECONDS: int = 30
     # Itinerary generation writes thousands of tokens; 30s is not enough for a strong model.

@@ -33,6 +33,7 @@ from app.modules.companion.intents import (
     classify_by_rules,
     parse_intent,
 )
+from app.modules.companion.speed import reply_tier
 from app.modules.planning.workflow import WorkflowSpec
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ def make_nodes(ports: CompanionPorts) -> dict[str, Callable[[dict[str, Any]], Aw
         used: list[str] = []
 
         for _ in range(MAX_TOOL_ITERATIONS):
-            response = await (ports.llm_stream or ports.llm)(messages, temperature=0.7, max_tokens=800, tools=schemas, tier="default")
+            response = await (ports.llm_stream or ports.llm)(messages, temperature=0.7, max_tokens=800, tools=schemas, tier=reply_tier(intent))
             usage.append(_usage_entry(response, "reply"))
             if not response.tool_calls:
                 return {"reply": response.content, "model_used": response.model_used, "usage": usage, "tools_used": used}
@@ -165,7 +166,7 @@ def make_nodes(ports: CompanionPorts) -> dict[str, Callable[[dict[str, Any]], Aw
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(result, default=str)})
 
         # Out of iterations: force a final answer with no tools so the loop cannot run forever.
-        final = await (ports.llm_stream or ports.llm)(messages, temperature=0.7, max_tokens=800, tools=None, tier="default")
+        final = await (ports.llm_stream or ports.llm)(messages, temperature=0.7, max_tokens=800, tools=None, tier=reply_tier(intent))
         usage.append(_usage_entry(final, "reply"))
         return {"reply": final.content, "model_used": final.model_used, "usage": usage, "tools_used": used}
 

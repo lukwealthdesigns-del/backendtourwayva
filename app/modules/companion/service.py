@@ -45,6 +45,7 @@ from app.modules.companion.intents import NEEDS_TRIP_CONTEXT, USES_PERSONALIZATI
 from app.modules.companion.memory_extraction import maybe_extract_memory
 from app.modules.companion.schemas import ConversationCreateRequest
 from app.modules.companion.smalltalk import detect_smalltalk, smalltalk_reply
+from app.modules.companion.speed import trim_history
 from app.modules.companion.summarization import maybe_summarize
 from app.modules.companion.tools import TOOL_SCHEMAS, ToolExecutionContext, execute_tool
 from app.modules.memory.service import MemoryService
@@ -129,9 +130,10 @@ class CompanionService:
             return await self._answer_smalltalk(conversation=conversation, user=user, kind=kind, asked_at=asked_at, emit=emit)
 
         history = await self.repo.list_messages(conversation.id, limit=_MAX_HISTORY_MESSAGES)
-        chat_history = [
+        # Only what the model needs: the newest message in full, older long answers shortened, the oldest dropped past a budget.
+        chat_history = trim_history([
             {"role": "assistant" if m.role == MessageRole.ASSISTANT else "user", "content": m.content} for m in history
-        ]
+        ])
 
         ports = self._build_ports(conversation, user, emit)
         state = await self._runner(
@@ -211,8 +213,16 @@ class CompanionService:
                 await emit({"type": "status", "phase": "tool", "tool": name})
             return await execute_tool(name, arguments, ctx)
 
+        flags: dict[str, bool] = {}
+
         async def has_feature(flag: FeatureFlag) -> bool:
-            return await self._has_feature(user, flag)
+            # ONE entitlement lookup per request (it used to run for every tool, several database round trips each).
+            if not flags:
+                from app.modules.entitlements.service import EntitlementService
+
+                resolved, _source = await EntitlementService(self.db).resolve_all(user.id)
+                flags.update(resolved)
+            return bool(flags.get(flag.value, False))
 
         async def build_system_prompt(intent: Intent) -> str:
             trip_context = ""

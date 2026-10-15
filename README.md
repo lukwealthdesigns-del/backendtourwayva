@@ -1837,3 +1837,13 @@ A guest can explore Discover, plan a trip, get an initial itinerary, edit it tem
 * **Image search** tries tidy variants of the name (duplicated place names collapsed; the venue name is always kept, never replaced by a generic city photo) and remembers a miss for 12 hours.
 * **Guests can change language, currency and country** with `PATCH /guest/session` (no account endpoint).
 * `requirements.txt` keeps `chardet<6` (the `RequestsDependencyWarning`): run `pip install "chardet<6"` or `pip uninstall chardet`.
+
+---
+
+## Round 4, phase 2: a faster Companion
+
+Where the time went, and what changed (`app/modules/companion/speed.py`, `graph.py`, `service.py`):
+* **Right-sized model.** `AI_FAST_MODEL` now defaults to `gpt-4.1-mini` (it used to fall back to the primary model, so even the "fast" classification used the biggest one). Only itinerary edits use the strong model; questions, lookups and chat use the fast one. Set `AI_FAST_MODEL=` (empty) to go back to one model for everything.
+* **One entitlement lookup per message** (it ran once per tool, several database round trips each).
+* **Shorter prompts.** The newest message is always sent in full; older long answers are shortened and the oldest messages dropped past a ~6,000-character budget.
+* Already in place from earlier: greetings and thanks answered with no model call; no classification call for a trip-less question; replies streamed; memory and summaries done after the reply is sent.
