@@ -678,7 +678,7 @@ async def _geocode(args: dict, ctx: ToolExecutionContext) -> dict:
     query = args.get("query")
     if not query:
         raise AppError("'query' is required.")
-    result = await GeocodingService().forward_geocode(str(query))
+    result = await GeocodingService().forward_geocode(str(query), precise=True)   # may be a named venue
     return result.model_dump(mode="json")
 
 

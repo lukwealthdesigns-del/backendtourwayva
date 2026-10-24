@@ -18,8 +18,12 @@ _ORDER_SETTING = {
 _resolver: Optional[ProviderResolver] = None
 
 
-def _google() -> bool:
-    return bool(settings.GOOGLE_MAPS_API_KEY)
+def _google_places() -> bool:
+    return bool(settings.GOOGLE_MAPS_API_KEY and settings.GOOGLE_PLACES_ENABLED)
+
+
+def _google_routes() -> bool:
+    return bool(settings.GOOGLE_MAPS_API_KEY and settings.GOOGLE_ROUTES_ENABLED)
 
 
 def _amadeus() -> bool:
@@ -61,18 +65,23 @@ def _build() -> ProviderResolver:
         from app.providers.maps.google_routes_provider import GoogleRoutesProvider
         return GoogleRoutesProvider()
 
+    def routes_mapbox():
+        from app.providers.mapbox.routing_provider import MapboxDirectionsProvider
+        return MapboxDirectionsProvider()
+
     def routes_ors():
         from app.providers.maps.openrouteservice_provider import OpenRouteServiceProvider
         return OpenRouteServiceProvider()
 
-    r.register(Capability.HOTEL_DISCOVERY, "google_places", is_configured=_google, factory=hotels_google)
+    r.register(Capability.HOTEL_DISCOVERY, "google_places", is_configured=_google_places, factory=hotels_google)
     r.register(Capability.HOTEL_INVENTORY, "amadeus", is_configured=_amadeus, factory=hotels_amadeus)
-    r.register(Capability.ACTIVITY_DISCOVERY, "google_places", is_configured=_google, factory=activities_google)
+    r.register(Capability.ACTIVITY_DISCOVERY, "google_places", is_configured=_google_places, factory=activities_google)
     r.register(Capability.ACTIVITY_DISCOVERY, "amadeus", is_configured=_amadeus, factory=activities_amadeus)
     r.register(Capability.FLIGHT_SEARCH, "travelpayouts", is_configured=lambda: bool(settings.TRAVELPAYOUTS_TOKEN), factory=flights_travelpayouts)
     r.register(Capability.FLIGHT_SEARCH, "amadeus", is_configured=_amadeus, factory=flights_amadeus)
     r.register(Capability.FLIGHT_STATUS, "aviationstack", is_configured=lambda: bool(settings.AVIATIONSTACK_API_KEY), factory=status_aviationstack)
-    r.register(Capability.ROUTING, "google_routes", is_configured=_google, factory=routes_google)
+    r.register(Capability.ROUTING, "mapbox", is_configured=lambda: bool(settings.MAPBOX_ACCESS_TOKEN), factory=routes_mapbox)
+    r.register(Capability.ROUTING, "google_routes", is_configured=_google_routes, factory=routes_google)
     r.register(Capability.ROUTING, "openrouteservice", is_configured=lambda: bool(settings.ORS_API_KEY), factory=routes_ors)
     return r
 

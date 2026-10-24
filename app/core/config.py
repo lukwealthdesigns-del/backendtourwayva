@@ -250,6 +250,27 @@ class Settings(BaseSettings):
     OPENING_HOURS_TOTAL_TIMEOUT_SECONDS: int = 20
     ORS_API_KEY: str = ""  # OpenRouteService — maps/routing provider
 
+    # --- Mapbox: the primary map, search, geocoding and routing provider ---
+    # SERVER-side token for the Geocoding and Directions APIs (never sent to browsers). The browser map uses a separate PUBLIC token
+    # (VITE_MAPBOX_TOKEN in the frontend) restricted to your site's URLs. Mapbox terms allow its geocoding/routing responses only
+    # together with a Mapbox map, so set the backend token and the frontend token together.
+    MAPBOX_ACCESS_TOKEN: str = ""
+    # Mapbox "temporary" geocoding results may not be cached or stored. Permanent geocoding (billed separately; needs a card on
+    # file or a contract) may. While this is false, Mapbox is used only for autocomplete and routing and OpenCage answers every
+    # lookup whose result is kept (trip destinations, saved places). Turn it on once permanent geocoding is enabled on your account.
+    MAPBOX_GEOCODING_PERMANENT: bool = False
+    # Mapbox gives no right to store routes, so they are not cached by default. Raise this only after confirming your terms.
+    MAPBOX_ROUTE_CACHE_SECONDS: int = 0
+    # Who answers each kind of geocoding, in priority order. "venue" lookups (a named restaurant or hotel) need points of interest,
+    # which Mapbox's geocoder does not return, so OpenCage (OpenStreetMap) goes first there.
+    GEOCODING_SUGGEST_PROVIDERS: str = "mapbox,opencage"
+    GEOCODING_PROVIDERS: str = "mapbox,opencage"
+    GEOCODING_VENUE_PROVIDERS: str = "opencage,mapbox"
+    # Google is optional and OFF by default. Google Places content may only be shown on a Google map (not Mapbox) and has strict
+    # storage limits; enable it only if you accept that. It also needs GOOGLE_MAPS_API_KEY with "Places API (New)" enabled.
+    GOOGLE_PLACES_ENABLED: bool = False
+    GOOGLE_ROUTES_ENABLED: bool = False
+
     # --- Guest mode ("Explore first. Commit later.") ---
     # All of these are enforced SERVER-side; the app only displays what the API reports (GET /guest/session).
     GUEST_MODE_ENABLED: bool = True
@@ -277,7 +298,7 @@ class Settings(BaseSettings):
     ACTIVITY_PROVIDERS: str = "google_places,amadeus"
     FLIGHT_PROVIDERS: str = "travelpayouts,amadeus"
     FLIGHT_STATUS_PROVIDERS: str = "aviationstack"
-    ROUTING_PROVIDERS: str = "google_routes,openrouteservice"
+    ROUTING_PROVIDERS: str = "mapbox,openrouteservice,google_routes"
 
     # --- Uploads ---
     MAX_AVATAR_SIZE_MB: int = 5

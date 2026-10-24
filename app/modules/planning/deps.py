@@ -50,7 +50,7 @@ def build_ports(
     hours_provider = get_opening_hours_provider()
 
     async def geocode(query: str) -> GeoPoint:
-        result = await geocoding.forward_geocode(query)
+        result = await geocoding.forward_geocode(query, precise=True)   # venues need points of interest: OpenCage first
         return GeoPoint(
             latitude=result.latitude, longitude=result.longitude,
             formatted_address=result.formatted_address, country=result.country, city=result.city,

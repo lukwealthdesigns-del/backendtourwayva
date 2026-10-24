@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import TripMemberRole
 from app.core.exceptions import ForbiddenError, NotFoundError, ValidationAppError
 from app.db.models.trip import TripCost, TripNote, TripRoute
+from app.core import location_policy as location_policy
+from app.core.config import settings
 from app.modules.maps.service import MapsService
 from app.modules.trips.extras_schemas import TripCostCreateRequest, TripCostSummaryResponse
 from app.modules.trips.service import TripService
@@ -139,6 +142,12 @@ class TripExtrasService:
             trip_id=trip_id, origin_item_id=origin_item_id, destination_item_id=destination_item_id,
             mode=mode.value, distance_meters=result.distance_meters, duration_seconds=result.duration_seconds,
         )
+        if not location_policy.may_store(result.provider, location_policy.Operation.ROUTE,
+                                         mapbox_route_cache_seconds=settings.MAPBOX_ROUTE_CACHE_SECONDS):
+            # This provider's terms give no right to keep its routes (Mapbox): answer now, save nothing. The next view asks again.
+            route.id = uuid.uuid4()
+            route.created_at = route.updated_at = datetime.now(timezone.utc)
+            return route, "live"
         await self.repo.create_route(route)
         await self.db.commit()
         return route, "live"

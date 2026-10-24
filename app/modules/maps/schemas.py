@@ -5,6 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from app.core.location_policy import MapEngine
 from app.providers.maps.interface import TravelMode
 
 
@@ -15,6 +16,7 @@ class RouteRequest(BaseModel):
     destination_lon: float = Field(..., ge=-180, le=180)
     mode: TravelMode = TravelMode.WALKING
     include_polyline: bool = False   # also return the path (encoded polyline) for drawing it on a map
+    map_engine: MapEngine = MapEngine.MAPBOX   # which map will draw it: providers whose terms forbid that map return no path
 
 
 class RouteResponse(BaseModel):

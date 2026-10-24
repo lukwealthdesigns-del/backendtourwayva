@@ -45,3 +45,4 @@ class LocationSuggestion(BaseModel):
 class LocationSuggestResponse(BaseModel):
     results: list[LocationSuggestion]
     source: str = Field(description="'live' (provider) or 'cache'")
+    provider: Optional[str] = Field(default=None, description="Which provider answered a live lookup (absent for cached answers).")

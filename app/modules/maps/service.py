@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.core import location_policy as policy
+from app.core.config import settings
 from app.core.exceptions import NotFoundError, ProviderUnavailableError, ValidationAppError
 from app.modules.maps.limits import haversine_km, route_too_far, valid_coordinates
 from app.modules.maps.schemas import RouteResponse
@@ -27,6 +29,7 @@ class MapsService:
         destination_lon: float,
         mode: TravelMode,
         include_polyline: bool = False,
+        map_engine: policy.MapEngine = policy.MapEngine.MAPBOX,
     ) -> RouteResponse:
         if not (valid_coordinates(origin_lat, origin_lon) and valid_coordinates(destination_lat, destination_lon)):
             raise ValidationAppError("Those coordinates are not valid (latitude -90 to 90, longitude -180 to 180).")
@@ -36,7 +39,8 @@ class MapsService:
             raise NotFoundError(f"No {mode.value} route exists between these places (about {round(straight_km):,} km apart).")
         cache_key = route_cache_key(origin_lat, origin_lon, destination_lat, destination_lon, mode.value)
         if include_polyline:
-            cache_key += ":path"
+            # Which provider may draw its path depends on the map the caller uses, so the engine is part of the cache key.
+            cache_key += f":path:{policy.MapEngine(map_engine).value}"
 
         cached = await CacheService.get_json(cache_key)
         if cached is not None:
@@ -58,13 +62,22 @@ class MapsService:
                 last_error = exc
         if result is None:
             raise last_error or ProviderUnavailableError("Route calculation failed.")
+        # Data-use policy (app/core/location_policy.py): a provider's path may only be drawn on a map its terms allow
+        # (Google's only on a Google map), and its answer is only cached if its terms allow and for no longer than they allow.
+        # Distance and travel time are plain facts and always returned.
+        rules = {"mapbox_route_cache_seconds": settings.MAPBOX_ROUTE_CACHE_SECONDS}
+        path = result.polyline
+        if path and not policy.may_display(result.provider, policy.Operation.ROUTE, map_engine, **rules):
+            path = None
         response = RouteResponse(
             distance_meters=result.distance_meters,
             duration_seconds=result.duration_seconds,
             mode=result.mode,
             source="live",
             provider=result.provider,
-            polyline=result.polyline,
+            polyline=path,
         )
-        await CacheService.set_json(cache_key, response.model_dump(mode="json"), TTL_ROUTE_SECONDS)
+        ttl = policy.cache_ttl(result.provider, policy.Operation.ROUTE, TTL_ROUTE_SECONDS, **rules)
+        if ttl:
+            await CacheService.set_json(cache_key, response.model_dump(mode="json"), ttl)
         return response
