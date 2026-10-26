@@ -45,6 +45,14 @@ def _build() -> ProviderResolver:
         from app.providers.activities.google_places_provider import GooglePlacesActivityProvider
         return GooglePlacesActivityProvider()
 
+    def hotels_osm():
+        from app.providers.osm.overpass_discovery import OsmHotelDiscoveryProvider
+        return OsmHotelDiscoveryProvider()
+
+    def activities_osm():
+        from app.providers.osm.overpass_discovery import OsmActivityProvider
+        return OsmActivityProvider()
+
     def activities_amadeus():
         from app.providers.activities.amadeus_provider import AmadeusActivityProvider
         return AmadeusActivityProvider()
@@ -76,6 +84,8 @@ def _build() -> ProviderResolver:
     r.register(Capability.HOTEL_DISCOVERY, "google_places", is_configured=_google_places, factory=hotels_google)
     r.register(Capability.HOTEL_INVENTORY, "amadeus", is_configured=_amadeus, factory=hotels_amadeus)
     r.register(Capability.ACTIVITY_DISCOVERY, "google_places", is_configured=_google_places, factory=activities_google)
+    r.register(Capability.HOTEL_DISCOVERY, "osm", is_configured=lambda: bool(settings.OSM_DISCOVERY_ENABLED), factory=hotels_osm)
+    r.register(Capability.ACTIVITY_DISCOVERY, "osm", is_configured=lambda: bool(settings.OSM_DISCOVERY_ENABLED), factory=activities_osm)
     r.register(Capability.ACTIVITY_DISCOVERY, "amadeus", is_configured=_amadeus, factory=activities_amadeus)
     r.register(Capability.FLIGHT_SEARCH, "travelpayouts", is_configured=lambda: bool(settings.TRAVELPAYOUTS_TOKEN), factory=flights_travelpayouts)
     r.register(Capability.FLIGHT_SEARCH, "amadeus", is_configured=_amadeus, factory=flights_amadeus)

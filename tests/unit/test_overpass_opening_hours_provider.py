@@ -27,6 +27,7 @@ def _run(coro):
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch):
     reset_breakers()
+    monkeypatch.setattr(overpass_module, "_cooldown_until", 0.0)   # a 429/5xx in one test must not pause the next
     store: dict[str, object] = {}
 
     async def get_json(key):
@@ -42,9 +43,10 @@ def _isolated(monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, status_code, payload=None):
+    def __init__(self, status_code, payload=None, headers=None):
         self.status_code = status_code
         self._payload = payload or {}
+        self.headers = headers or {}   # the client reads Retry-After from a refusal to pace itself
         self.request = httpx.Request("POST", "https://overpass.example/api")
 
     def json(self):
@@ -69,7 +71,7 @@ class _FakeAsyncClient:
 
 
 def _patch_http(monkeypatch, outcome):
-    monkeypatch.setattr(overpass_module, "httpx", NS(AsyncClient=lambda **k: _FakeAsyncClient(outcome), HTTPError=httpx.HTTPError))
+    monkeypatch.setattr(overpass_module, "httpx", NS(AsyncClient=lambda **k: _FakeAsyncClient(outcome), HTTPError=httpx.HTTPError, HTTPStatusError=httpx.HTTPStatusError))
 
 
 ELEMENTS = {"elements": [{"tags": {"name": "Eiffel Tower", "opening_hours": "Mo-Su 09:30-23:00"}}]}
@@ -94,7 +96,7 @@ def test_a_found_result_is_cached_so_a_second_lookup_does_not_hit_overpass(monke
             calls["n"] += 1
             return await super().post(url, data=data)
 
-    monkeypatch.setattr(overpass_module, "httpx", NS(AsyncClient=lambda **k: CountingClient(_FakeResponse(200, ELEMENTS)), HTTPError=httpx.HTTPError))
+    monkeypatch.setattr(overpass_module, "httpx", NS(AsyncClient=lambda **k: CountingClient(_FakeResponse(200, ELEMENTS)), HTTPError=httpx.HTTPError, HTTPStatusError=httpx.HTTPStatusError))
 
     first = _run(provider.lookup(name="Eiffel Tower", latitude=48.8584, longitude=2.2945))
     second = _run(provider.lookup(name="Eiffel Tower", latitude=48.8584, longitude=2.2945))
@@ -110,7 +112,7 @@ def test_no_matching_element_caches_a_miss_and_is_not_re_queried(monkeypatch, pr
             return await super().post(url, data=data)
 
     monkeypatch.setattr(overpass_module, "httpx", NS(
-        AsyncClient=lambda **k: CountingClient(_FakeResponse(200, {"elements": []})), HTTPError=httpx.HTTPError))
+        AsyncClient=lambda **k: CountingClient(_FakeResponse(200, {"elements": []})), HTTPError=httpx.HTTPError, HTTPStatusError=httpx.HTTPStatusError))
 
     assert _run(provider.lookup(name="Nonexistent Place", latitude=0, longitude=0)) is None
     assert _run(provider.lookup(name="Nonexistent Place", latitude=0, longitude=0)) is None
@@ -156,7 +158,7 @@ def test_the_venue_name_never_enters_the_overpass_query_string(monkeypatch, prov
             return await super().post(url, data=data)
 
     monkeypatch.setattr(overpass_module, "httpx", NS(
-        AsyncClient=lambda **k: CapturingClient(_FakeResponse(200, ELEMENTS)), HTTPError=httpx.HTTPError))
+        AsyncClient=lambda **k: CapturingClient(_FakeResponse(200, ELEMENTS)), HTTPError=httpx.HTTPError, HTTPStatusError=httpx.HTTPStatusError))
     _run(provider.lookup(name="Robert'); DROP TABLE x; --", latitude=48.8584, longitude=2.2945))
     assert "Robert" not in client_holder["data"]["data"]
 
@@ -175,7 +177,7 @@ def test_an_open_circuit_short_circuits_without_a_network_call(monkeypatch, prov
             called["n"] += 1
             raise AssertionError("must not be called while the circuit is open")
 
-    monkeypatch.setattr(overpass_module, "httpx", NS(AsyncClient=lambda **k: ExplodingClient(None), HTTPError=httpx.HTTPError))
+    monkeypatch.setattr(overpass_module, "httpx", NS(AsyncClient=lambda **k: ExplodingClient(None), HTTPError=httpx.HTTPError, HTTPStatusError=httpx.HTTPStatusError))
     assert _run(provider.lookup(name="Eiffel Tower", latitude=48.8584, longitude=2.2945)) is None
     assert called["n"] == 0
 

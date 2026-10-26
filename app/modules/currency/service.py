@@ -7,12 +7,25 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from app.core.config import settings
+from app.core.exceptions import ProviderUnavailableError
+from app.core.logging import get_logger
 from app.modules.currency.schemas import ConvertResponse, RateResponse
 from app.providers.currency.currencyapi_provider import CurrencyAPIProvider
 from app.services import durable_cache
 from app.services.cache_service import TTL_CURRENCY_SECONDS, CacheService, currency_rate_cache_key
 
+logger = get_logger(__name__)
 _provider = CurrencyAPIProvider()
+
+
+def _fallback_provider():
+    """The opt-in backup rate source (CURRENCY_FALLBACK_PROVIDER), or None."""
+    if (settings.CURRENCY_FALLBACK_PROVIDER or "").strip().lower() == "open_er_api":
+        from app.providers.currency.open_er_api_provider import OpenErApiProvider
+
+        return OpenErApiProvider()
+    return None
 
 
 class CurrencyService:
@@ -40,7 +53,14 @@ class CurrencyService:
             await CacheService.set_json(cache_key, response.model_dump(mode="json"), TTL_CURRENCY_SECONDS)
             return response
 
-        rate = await _provider.get_latest_rate(base, target)
+        try:
+            rate = await _provider.get_latest_rate(base, target)
+        except ProviderUnavailableError as exc:
+            backup = _fallback_provider()
+            if backup is None:
+                raise
+            logger.warning("currency_primary_unavailable_using_fallback", error=str(exc))
+            rate = await backup.get_latest_rate(base, target)
         response = RateResponse(
             base=rate.base, target=rate.target, rate=rate.rate,
             fetched_at=rate.fetched_at, source="live", provider=rate.provider,

@@ -124,8 +124,9 @@ class Settings(BaseSettings):
     # --- Itinerary generation (long AI workflow, Master Prompt §69) ---
     # "background": POST /trips/{id}/generate returns 202 immediately and a Celery
     # worker runs the workflow; poll GET /trips/{id}/generate/{job_id}.
-    # "inline": run inside the request (development/tests only — it can take a minute).
-    # Unset => background in staging/production, inline elsewhere.
+    # "task": run as a background task inside the API process (development without Redis/Celery): returns 202 at once and progress is pollable.
+    # "inline": run inside the request (tests only: the request stays open for the whole generation, so no progress can be shown).
+    # Unset => background in staging/production, task elsewhere.
     PLANNING_EXECUTION: Optional[str] = None
     # Smallest trip budget we accept (US dollars). Below this a plan cannot cover even the basics. 0 disables the check.
     MIN_TRIP_BUDGET_USD: float = 100.0
@@ -137,9 +138,12 @@ class Settings(BaseSettings):
 
     @property
     def planning_execution(self) -> str:
-        if self.PLANNING_EXECUTION in ("inline", "background"):
+        """"background" (Celery worker), "task" (a background task inside this server process: no Redis or worker needed, the request
+        returns immediately and progress can be polled) or "inline" (inside the request: tests only). Unset: background in
+        staging/production, task elsewhere. "task" needs ONE server process (plain `uvicorn`), because job state lives in memory without Redis."""
+        if self.PLANNING_EXECUTION in ("inline", "background", "task"):
             return self.PLANNING_EXECUTION
-        return "background" if self.ENVIRONMENT in ("staging", "production") else "inline"
+        return "background" if self.ENVIRONMENT in ("staging", "production") else "task"
 
     # --- Row-Level Security (Master Prompt §5, §64) ---
     # Off by default: turning this on is meaningful only once the app connects as a
@@ -232,6 +236,9 @@ class Settings(BaseSettings):
     WEATHER_API_KEY: str = ""
     OPENCAGE_API_KEY: str = ""
     CURRENCY_API_KEY: str = ""
+    # Used only when CurrencyAPI is unavailable (no or invalid key). "" = none. "open_er_api" = the keyless ExchangeRate-API open endpoint:
+    # daily rates, attribution required ("Rates By Exchange Rate API" linking to exchangerate-api.com). For a public product prefer a keyed plan.
+    CURRENCY_FALLBACK_PROVIDER: str = ""
     IPINFO_TOKEN: str = ""
     UNSPLASH_ACCESS_KEY: str = ""
 
@@ -248,6 +255,16 @@ class Settings(BaseSettings):
     # Ceiling for the whole batch of lookups in one planning run, so a slow Overpass never
     # delays itinerary generation by more than this.
     OPENING_HOURS_TOTAL_TIMEOUT_SECONDS: int = 20
+    # OpenStreetMap place discovery (hotels and attractions, keyless, via Overpass): the venue source when Google is off. No ratings,
+    # prices or availability exist in OSM, so none are shown. The public Overpass service is shared and rate limited: for real traffic
+    # point OVERPASS_API_URL at your own instance. Results are cached 7 days.
+    OSM_DISCOVERY_ENABLED: bool = True
+    # Tried in order after OVERPASS_API_URL when it cannot be reached or is overloaded (comma separated; blank = none). Public mirrors can lag
+    # the main database by weeks, which does not matter for hotels and landmarks. Own instance recommended for production.
+    OVERPASS_FALLBACK_URLS: str = "https://overpass.private.coffee/api/interpreter"
+    OSM_DISCOVERY_RADIUS_M: int = 8000
+    OSM_DISCOVERY_MAX_RESULTS: int = 40
+    OSM_DISCOVERY_TIMEOUT_SECONDS: int = 20
     ORS_API_KEY: str = ""  # OpenRouteService — maps/routing provider
 
     # --- Mapbox: the primary map, search, geocoding and routing provider ---
@@ -293,9 +310,9 @@ class Settings(BaseSettings):
     AVIATIONSTACK_BASE_URL: str = "https://api.aviationstack.com/v1"
     # Which provider answers each capability, in priority order (comma-separated). A provider is only used when it is
     # configured (its key is set), so a deployment with no Amadeus credentials simply never calls Amadeus.
-    HOTEL_DISCOVERY_PROVIDERS: str = "google_places"
+    HOTEL_DISCOVERY_PROVIDERS: str = "google_places,osm"
     HOTEL_INVENTORY_PROVIDERS: str = "amadeus"        # live rooms and prices; Google Places is NEVER inventory
-    ACTIVITY_PROVIDERS: str = "google_places,amadeus"
+    ACTIVITY_PROVIDERS: str = "google_places,amadeus,osm"
     FLIGHT_PROVIDERS: str = "travelpayouts,amadeus"
     FLIGHT_STATUS_PROVIDERS: str = "aviationstack"
     ROUTING_PROVIDERS: str = "mapbox,openrouteservice,google_routes"

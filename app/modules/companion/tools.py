@@ -960,7 +960,7 @@ async def _show_place_photos(args: dict, ctx: ToolExecutionContext) -> dict:
         ctx.collected["images"].append({
             "url": img.url, "thumbnail_url": img.thumbnail_url, "alt": q,
             "photographer_name": img.photographer_name, "photographer_profile_url": img.photographer_profile_url,
-            "attribution_required": img.attribution_required, "provider": img.provider,
+            "attribution_required": img.attribution_required, "provider": img.provider, "match": getattr(img, "match", "exact"),
         })
         shown.append(q)
     return {

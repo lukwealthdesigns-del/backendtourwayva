@@ -17,6 +17,7 @@ off by default.** OpenCage and OpenRouteService (both OpenStreetMap-based) stay 
 | Place/destination you keep | OpenCage (Mapbox first once `MAPBOX_GEOCODING_PERMANENT=true`) | kept answers need permanent geocoding |
 | Named venue (restaurant, hotel) | OpenCage, then Mapbox (street addresses only) | Mapbox's geocoder returns no points of interest |
 | Routes | Mapbox, OpenRouteService, Google Routes (if enabled) | Mapbox has no transit profile |
+| Hotels and attractions | Google Places (if enabled), Amadeus (activities), then **OpenStreetMap** | OSM has no ratings, prices or availability: none are shown |
 
 `GEOCODING_SUGGEST_PROVIDERS`, `GEOCODING_PROVIDERS`, `GEOCODING_VENUE_PROVIDERS` and `ROUTING_PROVIDERS` change the order.
 
@@ -31,8 +32,25 @@ off by default.** OpenCage and OpenRouteService (both OpenStreetMap-based) stay 
 
 Terms change. Re-check Mapbox's and Google's current terms before launch; this is a technical safeguard, not legal advice.
 
+## Hotel and attraction discovery without Google (OpenStreetMap)
+`app/providers/osm/` finds hotels and attractions near a destination through the Overpass API (keyless). Results are discovery only: a name,
+location, type, website and address where OSM has them, ranked by how notable the place looks (Wikidata/Wikipedia link, tourism type, hotel
+stars) and de-duplicated. OSM carries no ratings, prices or availability, so none are invented. Ids start with `osm:`.
+It shares one courtesy budget with the opening-hours lookups (two queries in flight, a pause after 429/5xx, a circuit breaker) and caches
+each ~1 km cell for 7 days. The public Overpass service is shared: for real traffic point `OVERPASS_API_URL` at your own instance.
+If the main Overpass server cannot be reached or is overloaded, `OVERPASS_FALLBACK_URLS` (default: overpass.private.coffee) is tried next; public mirrors can lag the main database. Switch off with `OSM_DISCOVERY_ENABLED=false`. Data is (c) OpenStreetMap contributors (ODbL): keep the attribution visible.
+
 ## Not done yet
-- Hotel/attraction discovery without Google: with Google off, planning has no live venue source unless Amadeus is configured, and the
-  planner marks its own suggestions as estimates. An OpenStreetMap-based discovery provider is the natural next step.
-- Drawing route paths on the trip map (the map component supports `routes`, no screen passes them yet).
-- Wiring `src/lib/mapConsent.js` to the cookie-consent store (Phase 3).
+- Wiring the frontend's cookie-consent store into anything beyond maps (maps are already consent-gated).
+- A test that Mapbox routes are not saved by `extras_service` (needs a database session to run).
+- Yoruba/Hausa/Igbo, the admin console and the destination guides are not translated (see the frontend notes).
+
+## Development without Redis or a worker
+`PLANNING_EXECUTION` unset now means `task` outside staging/production: itinerary generation runs as a background task inside the API process, the request
+returns at once and the page polls real progress. This needs ONE server process (plain `uvicorn`, no `--workers N`), because without Redis the job state is held in
+memory. Production keeps using Celery (`background`). A second Generate click while one is running attaches to the running job instead of failing.
+
+## Currency rates when CurrencyAPI has no valid key
+A `401 invalid_api_key` from CurrencyAPI makes `/currency/rates` return 503. Fix the key (`CURRENCY_API_KEY`). For development you can opt in to the keyless
+ExchangeRate-API open endpoint with `CURRENCY_FALLBACK_PROVIDER=open_er_api` (daily rates; attribution "Rates By Exchange Rate API" is required; not for a public
+product: use a keyed plan).

@@ -21,4 +21,5 @@ async def get_route(payload: RouteRequest, current_user: User = Depends(get_curr
         destination_lon=payload.destination_lon,
         mode=payload.mode,
         include_polyline=payload.include_polyline,
+        map_engine=payload.map_engine,
     )

@@ -23,7 +23,7 @@ from app.services.cache_service import (
 )
 
 _CITY_CODE_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30   # a destination's IATA city code never changes
-_DISCOVERY_PREFIX = "gp:"
+_DISCOVERY_PREFIXES = {"gp:": "google_places", "osm:": "osm"}   # a discovery id starts with the provider that made it
 
 
 def _response(offer: HotelOffer, *, ttl: int) -> HotelOfferResponse:
@@ -116,13 +116,15 @@ class HotelService:
     async def get_offer(
         self, *, hotel_id: str, check_in: date, check_out: date, adults: int
     ) -> "HotelOfferResponse | None":
-        """One hotel for replacement/re-verification, never cached. A discovery id ("gp:...") returns the place WITHOUT a
+        """One hotel for replacement/re-verification, never cached. A discovery id ("gp:..." Google Places, "osm:..." OpenStreetMap) returns the place WITHOUT a
         price; any other id is re-priced live by the inventory provider."""
-        if hotel_id.startswith(_DISCOVERY_PREFIX):
-            provider = get_resolver().first(Capability.HOTEL_DISCOVERY)
+        prefix = next((p for p in _DISCOVERY_PREFIXES if hotel_id.startswith(p)), None)
+        if prefix is not None:
+            wanted = _DISCOVERY_PREFIXES[prefix]
+            provider = next((p for name, p in get_resolver().providers(Capability.HOTEL_DISCOVERY) if name == wanted), None)
             if provider is None:
                 return None
-            hotel = await provider.get_hotel(reference=hotel_id[len(_DISCOVERY_PREFIX):])
+            hotel = await provider.get_hotel(reference=hotel_id[len(prefix):])
             return _response(hotel, ttl=TTL_ACTIVITY_SEARCH_SECONDS) if hotel else None
         provider = get_resolver().first(Capability.HOTEL_INVENTORY)
         if provider is None:

@@ -19,3 +19,6 @@ class ImageResponse(BaseModel):
     attribution_required: bool
     source: str  # "cache" | "live"
     provider: str
+    # How well the photo matches the request: "exact" (this place), "category" (this kind of place nearby) or "area" (the neighbourhood or
+    # city). Anything but "exact" is illustrative and the UI says so; a venue's name is never claimed for a photo of something else.
+    match: str = "exact"

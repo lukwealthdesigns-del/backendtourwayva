@@ -12,6 +12,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from app.core.config import settings
+from app.modules.planning.jobs import JobStore
 from app.core.constants import TripItemType, TripStatus
 from app.core.exceptions import ConflictError, NotFoundError, ProviderUnavailableError
 from app.modules.planning import persistence as persistence_module
@@ -541,3 +542,75 @@ def test_a_lapsed_plan_becomes_a_failed_job_with_a_clear_code_and_frees_the_lock
     job = _run(env.service.start(trip_id=env.trip.id, user=env.user, request=REQUEST, idempotency_key=None))
     assert job["status"] == "failed" and job["error"]["code"] == "forbidden" and job["error"]["retryable"] is False
     assert not [k for k in redis if k.startswith("planning:lock:")]
+
+
+# ---------------------------------------------------------------------------
+# In-process "task" mode (development without Redis/Celery) and attaching to a running generation
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def task_mode(redis, monkeypatch):
+    """Task mode with the background task replaced by a recorder, plus the `latest job for this trip` pointer the base fixture omits."""
+    from app.modules.planning import service as planning_service
+
+    async def set_raw(key, value, ttl):
+        redis[key] = value
+
+    monkeypatch.setattr(CacheService, "set_raw", staticmethod(set_raw))
+    monkeypatch.setattr(settings, "PLANNING_EXECUTION", "task")
+    spawned = []
+
+    def fake_spawn(job_id):
+        spawned.append(str(job_id))
+        planning_service._TASK_BY_JOB[str(job_id)] = object()      # a live task, as far as the service can tell
+        return None
+
+    monkeypatch.setattr(planning_service, "spawn_in_process", fake_spawn)
+    yield spawned
+    planning_service._TASK_BY_JOB.clear()
+
+
+def test_task_mode_returns_at_once_with_a_queued_job_so_progress_can_be_polled(task_mode):
+    service = _service()
+    job = _run(service.start(trip_id=uuid.uuid4(), user=_user(), request=REQUEST, idempotency_key=None))
+    assert job["status"] == "queued" and task_mode == [job["job_id"]]
+    assert service.executed == []                                    # nothing ran inside the request
+
+
+def test_default_execution_is_a_background_task_in_development_and_a_worker_in_production(monkeypatch):
+    monkeypatch.setattr(settings, "PLANNING_EXECUTION", None)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    assert settings.planning_execution == "task"
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    assert settings.planning_execution == "background"
+    monkeypatch.setattr(settings, "PLANNING_EXECUTION", "inline")
+    assert settings.planning_execution == "inline"
+
+
+def test_a_second_start_while_the_first_is_running_attaches_to_it_instead_of_failing(task_mode):
+    service, user, trip_id = _service(), _user(), uuid.uuid4()
+    first = _run(service.start(trip_id=trip_id, user=user, request=REQUEST, idempotency_key=None))
+    second = _run(service.start(trip_id=trip_id, user=user, request=REQUEST, idempotency_key=None))
+    assert second["job_id"] == first["job_id"] and second["status"] in ("queued", "running")
+    assert task_mode == [first["job_id"]]                            # one generation, not two
+
+
+def test_another_users_generation_is_not_attached_to(task_mode):
+    service, trip_id = _service(), uuid.uuid4()
+    first = _run(service.start(trip_id=trip_id, user=_user(), request=REQUEST, idempotency_key=None))
+    second = _run(service.start(trip_id=trip_id, user=_user(), request=REQUEST, idempotency_key=None))
+    assert second["job_id"] != first["job_id"]
+
+
+def test_a_job_orphaned_by_a_server_restart_is_closed_and_replaced_not_waited_on(task_mode, redis):
+    from app.modules.planning import service as planning_service
+
+    service, user, trip_id = _service(), _user(), uuid.uuid4()
+    first = _run(service.start(trip_id=trip_id, user=user, request=REQUEST, idempotency_key=None))
+    planning_service._TASK_BY_JOB.clear()                            # the process restarted: its task is gone
+    redis[f"planning:lock:{trip_id}"] = first["job_id"]              # and it left the per-trip lock behind
+    second = _run(service.start(trip_id=trip_id, user=user, request=REQUEST, idempotency_key=None))
+    old = _run(JobStore.get(first["job_id"]))
+    assert old["status"] == "failed" and old["error"]["code"] == "interrupted" and old["error"]["retryable"] is True
+    assert second["job_id"] != first["job_id"] and second["status"] == "queued"
+    assert f"planning:lock:{trip_id}" not in redis                   # not stuck behind a lock for minutes

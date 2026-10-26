@@ -43,6 +43,22 @@ def _gate() -> asyncio.Semaphore:
     return _semaphore
 
 
+def shared_gate() -> asyncio.Semaphore:
+    """The one in-flight limit for the public Overpass service, shared with place discovery (app/providers/osm)."""
+    return _gate()
+
+
+def cooling_down() -> bool:
+    return time.monotonic() < _cooldown_until
+
+
+def start_cooldown(pause: float) -> None:
+    """Leave Overpass alone for `pause` seconds (after a 429/5xx), for every caller."""
+    global _cooldown_until
+    if pause:
+        _cooldown_until = max(_cooldown_until, time.monotonic() + pause)
+
+
 class OverpassOpeningHoursProvider(OpeningHoursProvider):
     def __init__(
         self, *, url: Optional[str] = None, timeout: Optional[int] = None, radius_m: Optional[int] = None

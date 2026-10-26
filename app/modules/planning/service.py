@@ -13,6 +13,8 @@ from the stored trip. The request can only add preferences.
 """
 from __future__ import annotations
 
+import asyncio
+
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
@@ -90,6 +92,30 @@ class GenerationCancelled(Exception):
     cancelled generation leaves the trip exactly as it was."""
 
 
+# Background tasks started by "task" execution. A reference is kept so the event loop cannot garbage-collect a running generation.
+_IN_PROCESS_TASKS: set[asyncio.Task] = set()
+_TASK_BY_JOB: dict[str, asyncio.Task] = {}      # job id -> its live task, so a job orphaned by a server reload can be recognised
+
+
+async def _run_detached(job_id: str) -> None:
+    """Runs one job with its OWN database session (the request's session closes when the response is sent), like the Celery worker."""
+    from app.db.session import AsyncSessionLocal
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await PlanningService(db).run_job(job_id)    # records success/failure on the job itself
+    except Exception as exc:  # noqa: BLE001 - never let a background crash vanish silently
+        logger.error("planning_task_crashed", job_id=job_id, error=str(exc))
+
+
+def spawn_in_process(job_id: uuid.UUID | str) -> asyncio.Task:
+    task = asyncio.get_running_loop().create_task(_run_detached(str(job_id)))
+    _IN_PROCESS_TASKS.add(task)
+    _TASK_BY_JOB[str(job_id)] = task
+    task.add_done_callback(lambda t: (_IN_PROCESS_TASKS.discard(t), _TASK_BY_JOB.pop(str(job_id), None)))
+    return task
+
+
 class PlanningService:
     def __init__(self, db: AsyncSession, *, runner: Optional[Runner] = None, ports_factory: Optional[Callable] = None):
         self.db = db
@@ -141,6 +167,17 @@ class PlanningService:
         trip = await self.trips.get_trip_authorized(trip_id=trip_id, user_id=user.id, require_editor=True)
         await self._enforce_plan(trip, user.id, request.from_day)
 
+        # A generation is already running for this trip (a double click, or a retry after a slow response): attach to it instead of
+        # starting a second one that would lose the per-trip lock and fail with "already being generated".
+        running = await JobStore.latest_for_trip(trip_id)
+        if running is not None and running["status"] in ("queued", "running") and running["user_id"] == str(user.id):
+            alive = settings.planning_execution != "task" or str(running["job_id"]) in _TASK_BY_JOB
+            if alive:
+                return public_job(running)
+            # Its task is gone (the dev server restarted mid-run): close it out and release the lock so the user is not stuck for minutes.
+            await self._finish(running, error={"code": "interrupted", "message": "The previous generation was interrupted.", "retryable": True})
+            await JobStore.release_trip_lock(trip_id, running["job_id"])
+
         job_id = uuid.uuid4()
         if idempotency_key:
             earlier = await JobStore.claim_idempotency(
@@ -170,6 +207,10 @@ class PlanningService:
                 await self._finish(job, error={"code": "queue_unavailable", "message": "Could not queue the job.",
                                                "retryable": True})
                 raise ProviderUnavailableError("The planning queue is unavailable. Please try again shortly.") from exc
+            return public_job(job)
+
+        if settings.planning_execution == "task":
+            spawn_in_process(job_id)          # returns now; the page polls GET /generate/{job_id} for real progress
             return public_job(job)
 
         return public_job(await self.run_job(job_id))

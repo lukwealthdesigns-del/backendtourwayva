@@ -131,7 +131,8 @@ async def stream_message(
                     user = await UserRepository(session).get_by_id(user_id)
                     conversation = await service.get_owned_conversation(conversation_id=conversation_id, user_id=user_id)
                     reply = await service.send_message(
-                        conversation=conversation, user=user, content=payload.content, defer_post_turn=True, emit=emit
+                        conversation=conversation, user=user, content=payload.content, defer_post_turn=True, emit=emit,
+                        client_context=payload.client_context.model_dump() if payload.client_context else None,
                     )
                     holder["reply"] = reply.content
                     await queue.put({"type": "done", "message": MessageResponse.model_validate(reply).model_dump(mode="json")})
@@ -190,7 +191,10 @@ async def send_message(
     (and isn't yet) fed to the LLM."""
     service = CompanionService(db)
     conversation = await service.get_owned_conversation(conversation_id=conversation_id, user_id=current_user.id)
-    reply = await service.send_message(conversation=conversation, user=current_user, content=payload.content, defer_post_turn=True)
+    reply = await service.send_message(
+        conversation=conversation, user=current_user, content=payload.content, defer_post_turn=True,
+        client_context=payload.client_context.model_dump() if payload.client_context else None,
+    )
     # Summarization and memory extraction are extra model calls that do not change this reply: run them after the
     # response has been sent, on their own database session (the request's session closes with the response).
     background_tasks.add_task(_post_turn, conversation_id, current_user.id, payload.content, reply.content)

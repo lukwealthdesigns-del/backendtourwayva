@@ -39,6 +39,7 @@ from app.modules.companion.context import (
     format_memories,
     format_preferences,
     format_trip_context,
+    format_user_snapshot,
 )
 from app.modules.companion.graph import CompanionPorts, CompanionState, build_companion_spec
 from app.modules.companion.intents import NEEDS_TRIP_CONTEXT, USES_PERSONALIZATION, Intent
@@ -108,7 +109,7 @@ class CompanionService:
 
     async def send_message(
         self, *, conversation: Conversation, user: User, content: str, defer_post_turn: bool = False,
-        emit: Optional[Callable[[dict], Awaitable[None]]] = None,
+        emit: Optional[Callable[[dict], Awaitable[None]]] = None, client_context: Optional[dict] = None,
     ) -> Message:
         """Runs one turn and returns the saved reply. With `defer_post_turn=True` the (LLM-backed) summarization and
         memory extraction are NOT run here: the caller runs `post_turn()` after responding, so the user is not kept
@@ -135,7 +136,7 @@ class CompanionService:
             {"role": "assistant" if m.role == MessageRole.ASSISTANT else "user", "content": m.content} for m in history
         ])
 
-        ports = self._build_ports(conversation, user, emit)
+        ports = self._build_ports(conversation, user, emit, client_context)
         state = await self._runner(
             build_companion_spec(ports),
             # `has_trip` lets the graph skip the classification model call for an ordinary trip-less question.
@@ -189,7 +190,8 @@ class CompanionService:
     # Ports for the graph
     # ------------------------------------------------------------------
     def _build_ports(
-        self, conversation: Conversation, user: User, emit: Optional[Callable[[dict], Awaitable[None]]] = None
+        self, conversation: Conversation, user: User, emit: Optional[Callable[[dict], Awaitable[None]]] = None,
+        client_context: Optional[dict] = None,
     ) -> CompanionPorts:
         ctx = ToolExecutionContext(db=self.db, user=user, conversation_id=conversation.id, llm=self.llm)
         self._collected = ctx.collected   # read by send_message after the graph finishes
@@ -235,9 +237,15 @@ class CompanionService:
                     memories = format_memories(
                         [m.content for m in await self.memory_service.list_enabled_for_user(user.id)]
                     )
+            try:
+                trips = await TripRepository(self.db).list_trips_for_user(user.id)
+            except Exception as exc:  # noqa: BLE001 - the snapshot is a help, never a reason to fail a reply
+                logger.warning("companion_snapshot_trips_failed", error=str(exc))
+                trips = []
+            snapshot = format_user_snapshot(user, client=client_context, trips=trips)
             return assemble_system_prompt(
                 intent, summary=conversation.summary, trip_context=trip_context,
-                preferences=preferences, memories=memories, language=user.language,
+                preferences=preferences, memories=memories, language=user.language, user_snapshot=snapshot,
             )
 
         return CompanionPorts(

@@ -24,8 +24,18 @@ class ConversationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ClientContext(BaseModel):
+    """What the app already knows about where the user is, sent with a message so the Companion can answer "near me". Never stored."""
+    latitude: Optional[float] = Field(default=None, ge=-90, le=90)
+    longitude: Optional[float] = Field(default=None, ge=-180, le=180)
+    place: Optional[str] = Field(default=None, max_length=120)
+    source: Optional[str] = Field(default=None, pattern="^(chosen|approximate|device)$")
+    timezone: Optional[str] = Field(default=None, max_length=64)
+
+
 class MessageCreateRequest(BaseModel):
     content: str = Field(..., min_length=1, max_length=4000)
+    client_context: Optional[ClientContext] = None
 
 
 class MessageResponse(BaseModel):
